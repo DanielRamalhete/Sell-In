@@ -5,7 +5,7 @@ import json
 import requests
 import msal
 
-GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_BASE = "https://graph.microsoft.com/v2.0"
 
 def get_env(name: str) -> str:
     v = os.getenv(name)
