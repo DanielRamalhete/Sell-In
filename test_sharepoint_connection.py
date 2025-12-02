@@ -12,12 +12,12 @@ SITE_HOSTNAME  = os.getenv("SITE_HOSTNAME")
 SITE_PATH      = os.getenv("SITE_PATH")
 
 # Ficheiro FONTE (mês atual)
-SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Ficheiro1.xlsx"
+SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
 SRC_TABLE      = "TabelaAutomatica"
 
 # Ficheiro DESTINO (consolidado)
-DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
-DST_TABLE      = "Tabela25"
+DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
+DST_TABLE      = "Historico"
 
 DATE_COLUMN    = "Data Entrega"
 # ==========================
