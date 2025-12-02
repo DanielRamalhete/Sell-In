@@ -52,7 +52,7 @@ columns = cols_resp.get("value", [])
 target_index = None
 for idx, col in enumerate(columns):
     if col.get("name") == COLUMN_NAME:
-        target_index = idx
+        target_index = idx + 1
         break
 
 if target_index is None:
