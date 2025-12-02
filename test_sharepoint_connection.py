@@ -52,14 +52,14 @@ columns = cols_resp.get("value", [])
 target_index = None
 for idx, col in enumerate(columns):
     if col.get("name") == COLUMN_NAME:
-        target_index = idx + 1
+        target_index = idx
         break
 
 if target_index is None:
     raise Exception(f"Coluna '{COLUMN_NAME}' não encontrada na tabela '{TABLE_NAME}'.")
 
 # 6) Remover coluna pelo índice
-del_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{TABLE_NAME}/columns/{target_index}"
+del_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{TABLE_NAME}/columns/{COLUMN_NAME}"
 del_resp = requests.delete(del_url, headers=excel_headers)
 if del_resp.status_code in (200, 204):
     print(f"[OK] Coluna '{COLUMN_NAME}' removida com sucesso da tabela '{TABLE_NAME}'.")
