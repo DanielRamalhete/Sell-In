@@ -65,3 +65,9 @@ if del_resp.status_code in (200, 204):
     print(f"[OK] Coluna '{COLUMN_NAME}' removida com sucesso da tabela '{TABLE_NAME}'.")
 else:
     raise Exception(f"Erro ao remover coluna: {del_resp.status_code} {del_resp.text}")
+
+
+requests.post(
+    f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession",
+    headers=excel_headers
+)
