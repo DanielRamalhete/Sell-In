@@ -11,7 +11,7 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 SITE_HOSTNAME = os.getenv("SITE_HOSTNAME")
 SITE_PATH = os.getenv("SITE_PATH")
 FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
-TABLE_NAME = "Tabela 25"  # Nome da tabela no Excel
+TABLE_NAME = "Tabela25"  # Nome da tabela no Excel
 COLUMN_NAME = "DIM"       # Nome da coluna a remover
 
 # 1) Token
