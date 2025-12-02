@@ -19,7 +19,7 @@ SRC_TABLE      = "TabelaAutomatica"
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
 DST_TABLE      = "Tabela25"
 
-DATE_COLUMN    = "Data"
+DATE_COLUMN    = "Data Entrega"
 # ==========================
 
 # ---- Autenticação ----
