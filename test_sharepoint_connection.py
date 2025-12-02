@@ -1,3 +1,4 @@
+
 import os, json, requests, msal
 from datetime import datetime, timedelta
 
@@ -83,21 +84,6 @@ def clear_rows_in_range(drive_id, item_id, worksheet_id, range_address, session_
     r = requests.patch(url, headers=h, data=json.dumps(body))
     r.raise_for_status()
 
-def delete_blank_rows(drive_id, item_id, table_name, session_id):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    rows = list_table_rows(drive_id, item_id, table_name, session_id)
-    blank_indexes = []
-    for r in rows:
-        vals = (r.get("values", [[]])[0] or [])
-        if all(v == "" or v is None for v in vals):
-            blank_indexes.append(r.get("index"))
-    for idx in sorted(blank_indexes, reverse=True):
-        url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}"
-        resp = requests.delete(url, headers=h)
-        if resp.status_code not in (200, 204):
-            print(f"[WARN] Falha ao apagar linha {idx}: {resp.status_code}")
-    print(f"[OK] Removidas {len(blank_indexes)} linhas em branco.")
-
 # ---- Utilidades ----
 def excel_value_to_date(v):
     if isinstance(v, (int, float)):
@@ -160,9 +146,10 @@ try:
             range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
             sheet_name = range_address.split("!")[0]
             worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
+            # Ajustar range para não apagar cabeçalho
             start_col = range_address.split("!")[1].split(":")[0][0]
             end_col = range_address.split(":")[1][0]
-            start_row = 2
+            start_row = 2  # começa na linha 2
             end_row = start_row + len(rows_to_clear) - 1
             clean_range = f"{start_col}{start_row}:{end_col}{end_row}"
             print(f"[DEBUG] Worksheet: {sheet_name}, ID: {worksheet_id}")
@@ -172,9 +159,6 @@ try:
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
-
-        # Limpeza final: remover linhas em branco
-        delete_blank_rows(drive_id, dst_id, DST_TABLE, dst_sid)
 
 finally:
     close_session(drive_id, src_id, src_sid)
