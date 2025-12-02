@@ -86,14 +86,24 @@ def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     )
     r.raise_for_status()
 
-def delete_row_by_index(drive_id, item_id, table_name, session_id, idx):
+def get_table_range(drive_id, item_id, table_name, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    r = requests.delete(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
+    r = requests.get(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range",
         headers=h
     )
-    if r.status_code not in (200, 204):
-        raise Exception(f"Erro a eliminar linha {idx}: {r.status_code} {r.text}")
+    r.raise_for_status()
+    return r.json().get("address")
+
+def clear_rows_in_range(drive_id, item_id, range_address, session_id, num_cols, rows_to_clear):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    empty_values = [["" for _ in range(num_cols)] for _ in rows_to_clear]
+    body = {"values": empty_values}
+    r = requests.patch(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{range_address.split('!')[0]}/range(address='{range_address}')",
+        headers=h, data=json.dumps(body)
+    )
+    r.raise_for_status()
 
 # ---- Utilidades ----
 def excel_value_to_date(v):
@@ -128,7 +138,6 @@ try:
     date_idx_src = src_headers.index(DATE_COLUMN)
     date_idx_dst = dst_headers.index(DATE_COLUMN)
 
-    # Definir mês atual
     today = datetime.today()
     month_start = datetime(today.year, today.month, 1).date()
     month_end = datetime(today.year, today.month, 31).date()
@@ -147,22 +156,24 @@ try:
     if not to_import:
         print("Nada para importar.")
     else:
-        # Apagar linhas do mês atual no destino
+        # Limpar linhas do mês atual no destino via Range
         dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
-        to_delete_idx = []
+        rows_to_clear = []
         for r in dst_rows:
             vals = (r.get("values", [[]])[0] or [])
             if len(vals) > date_idx_dst:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
-                    to_delete_idx.append(r.get("index"))
+                    rows_to_clear.append(vals)
 
-        for idx in sorted(to_delete_idx, reverse=True):
-            delete_row_by_index(drive_id, dst_id, DST_TABLE, dst_sid, idx)
+        if rows_to_clear:
+            range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
+            clear_rows_in_range(drive_id, dst_id, range_address, dst_sid, len(dst_headers), rows_to_clear)
+            print(f"[OK] Limpei {len(rows_to_clear)} linhas do mês atual no destino.")
 
         # Inserir novas linhas
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
-        print(f"[OK] Atualizado mês atual com {len(to_import)} linhas.")
+        print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
     close_session(drive_id, src_id, src_sid)
