@@ -37,7 +37,7 @@ def main():
     CLIENT_ID     = get_env("CLIENT_ID")
     CLIENT_SECRET = get_env("CLIENT_SECRET")
     SITE_HOSTNAME = "braveperspective.sharepoint.com"    # ex.: contoso.sharepoint.com
-    SITE_PATH     = "/sites/equipa.geral" # ex.: /sites/Finance
+    SITE_PATH     = "/sites/equipa.comite" # ex.: /sites/Finance
 
     # ====== Token ======
     token = get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
