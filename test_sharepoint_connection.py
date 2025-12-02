@@ -48,7 +48,7 @@ def main():
 
     # ====== 1) Resolver o Site (hostname + path) ======
     # GET /sites/{hostname}:/sites/{sitePath}
-    site_url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/sites{SITE_PATH}"
+    site_url = "https://braveperspective.sharepoint.com/sites/equipa.comite/"   # f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/sites{SITE_PATH}"
     site_resp = requests.get(site_url, headers=headers)
     if site_resp.status_code != 200:
         print("[ERRO] Não consegui resolver o site:",
