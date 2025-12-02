@@ -1,7 +1,17 @@
+
 name: Testar conexão SharePoint via Graph
 
 on:
+  # Continua a permitir execução manual
   workflow_dispatch:
+
+  # Agendamentos (GitHub Actions usa UTC)
+  schedule:
+    # Inverno em PT (Nov–Mar): 03:05 UTC = 03:05 PT
+    - cron: '5 3 * 11-12 *'  # Novembro–Dezembro
+    - cron: '5 3 * 1-3 *'    # Janeiro–Março
+    # Verão em PT (Apr–Oct): 02:05 UTC = 03:05 PT
+    - cron: '5 2 * 4-10 *'   # Abril–Outubro
 
 jobs:
   test-connection:
