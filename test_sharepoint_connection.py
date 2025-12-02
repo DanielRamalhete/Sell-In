@@ -38,6 +38,7 @@ def main():
     CLIENT_SECRET = get_env("CLIENT_SECRET")
     SITE_HOSTNAME = "braveperspective.sharepoint.com"    # ex.: contoso.sharepoint.com
     SITE_PATH     = "/sites/equipa.comite" # ex.: /sites/Finance
+    FILE_PATH = "/Documentos Partilhados/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
 
     # ====== Token ======
     token = get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
@@ -72,23 +73,15 @@ def main():
     drive_name = drive.get("name")
     print(f"[OK] Drive obtido: id={drive_id}, name={drive_name}")
 
-    # ====== 3) Listar alguns itens na raiz do drive ======
-    # GET /drives/{driveId}/root/children?$top=5
-    list_resp = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/root/children?$top=5",
-        headers=headers
-    )
-    if list_resp.status_code != 200:
-        print("[ERRO] Não consegui listar itens:",
-              list_resp.status_code, list_resp.text, file=sys.stderr)
-        sys.exit(4)
+    
+# 3) Download do ficheiro
+download_url = f"{GRAPH_BASE}/drives/{drive_id}/root:{FILE_PATH}:/content"
+file_resp = requests.get(download_url, headers=headers)
+if file_resp.status_code != 200:
+    raise Exception(f"Erro ao fazer download: {file_resp.status_code} {file_resp.text}")
 
-    items = list_resp.json().get("value", [])
-    print(f"[OK] Conexão ao SharePoint/Graph confirmada. Itens na raiz (top 5):")
-    for i, it in enumerate(items, start=1):
-        print(f"  {i:02d}. {it.get('name')}  [{it.get('id')}]")
+# Guardar localmente
+with open("Historico_Sell_In_Mensal.xlsx", "wb") as f:
+    f.write(file_resp.content)
 
-    print("[SUCESSO] Teste concluído.")
-
-if __name__ == "__main__":
-    main()
+print("[OK] Ficheiro descarregado com sucesso!")
