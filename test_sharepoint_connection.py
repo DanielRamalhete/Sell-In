@@ -11,11 +11,9 @@ CLIENT_SECRET  = os.getenv("CLIENT_SECRET")
 SITE_HOSTNAME  = os.getenv("SITE_HOSTNAME")
 SITE_PATH      = os.getenv("SITE_PATH")
 
-# Ficheiro FONTE (mês atual)
 SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
 SRC_TABLE      = "TabelaAutomatica"
 
-# Ficheiro DESTINO (consolidado)
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
 DST_TABLE      = "Historico"
 
@@ -33,26 +31,17 @@ base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application
 
 # ---- Helpers ----
 def get_site_id():
-    r = requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers)
-    r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
 
 def get_drive_id(site_id):
-    r = requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers)
-    r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
 
 def get_item_id(drive_id, path):
-    r = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers)
-    r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
 
 def create_session(drive_id, item_id):
-    r = requests.post(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
-        headers=base_headers, data=json.dumps({"persistChanges": True})
-    )
-    r.raise_for_status()
+    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
+                      headers=base_headers, data=json.dumps({"persistChanges": True}))
     return r.json()["id"]
 
 def close_session(drive_id, item_id, session_id):
@@ -61,48 +50,38 @@ def close_session(drive_id, item_id, session_id):
 
 def get_table_headers(drive_id, item_id, table_name, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange",
-        headers=h
-    )
-    r.raise_for_status()
+    r = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange", headers=h)
     return [str(x) for x in (r.json().get("values", [[]])[0] or [])]
 
 def list_table_rows(drive_id, item_id, table_name, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows",
-        headers=h
-    )
-    r.raise_for_status()
-    return r.json().get("value", [])
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows", headers=h).json().get("value", [])
 
 def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     body = {"index": None, "values": values_2d}
-    r = requests.post(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add",
-        headers=h, data=json.dumps(body)
-    )
-    r.raise_for_status()
+    requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add", headers=h, data=json.dumps(body)).raise_for_status()
 
 def get_table_range(drive_id, item_id, table_name, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range",
-        headers=h
-    )
-    r.raise_for_status()
-    return r.json().get("address")
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range", headers=h).json().get("address")
 
-def clear_rows_in_range(drive_id, item_id, range_address, session_id, num_cols, rows_to_clear):
+def get_worksheet_id(drive_id, item_id, session_id, sheet_name):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    sheets = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets", headers=h).json().get("value", [])
+    for s in sheets:
+        if s.get("name") == sheet_name:
+            return s.get("id")
+    raise Exception(f"Folha '{sheet_name}' não encontrada.")
+
+def clear_rows_in_range(drive_id, item_id, worksheet_id, range_address, session_id, num_cols, rows_to_clear):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     empty_values = [["" for _ in range(num_cols)] for _ in rows_to_clear]
     body = {"values": empty_values}
-    r = requests.patch(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{range_address.split('!')[0]}/range(address='{range_address}')",
-        headers=h, data=json.dumps(body)
-    )
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}/range(address='{range_address}')"
+    print(f"[DEBUG] PATCH URL: {url}")
+    print(f"[DEBUG] Clearing {len(rows_to_clear)} rows in range: {range_address}")
+    r = requests.patch(url, headers=h, data=json.dumps(body))
     r.raise_for_status()
 
 # ---- Utilidades ----
@@ -142,11 +121,9 @@ try:
     month_start = datetime(today.year, today.month, 1).date()
     month_end = datetime(today.year, today.month, 31).date()
 
-    # Ler linhas da fonte
     src_rows = list_table_rows(drive_id, src_id, SRC_TABLE, src_sid)
     src_values = [r.get("values", [[]])[0] for r in src_rows]
 
-    # Filtrar linhas do mês atual
     to_import = []
     for vals in src_values:
         d = excel_value_to_date(vals[date_idx_src])
@@ -156,7 +133,6 @@ try:
     if not to_import:
         print("Nada para importar.")
     else:
-        # Limpar linhas do mês atual no destino via Range
         dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
         rows_to_clear = []
         for r in dst_rows:
@@ -168,10 +144,19 @@ try:
 
         if rows_to_clear:
             range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
-            clear_rows_in_range(drive_id, dst_id, range_address, dst_sid, len(dst_headers), rows_to_clear)
+            sheet_name = range_address.split("!")[0]
+            worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
+            # Ajustar range para não apagar cabeçalho
+            start_col = range_address.split("!")[1].split(":")[0][0]
+            end_col = range_address.split(":")[1][0]
+            start_row = 2  # começa na linha 2
+            end_row = start_row + len(rows_to_clear) - 1
+            clean_range = f"{start_col}{start_row}:{end_col}{end_row}"
+            print(f"[DEBUG] Worksheet: {sheet_name}, ID: {worksheet_id}")
+            print(f"[DEBUG] Range to clear: {clean_range}")
+            clear_rows_in_range(drive_id, dst_id, worksheet_id, clean_range, dst_sid, len(dst_headers), rows_to_clear)
             print(f"[OK] Limpei {len(rows_to_clear)} linhas do mês atual no destino.")
 
-        # Inserir novas linhas
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
