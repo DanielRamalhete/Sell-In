@@ -1,7 +1,5 @@
-
 import os, json, requests, msal
 from datetime import datetime, timedelta
-from calendar import monthrange
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -63,27 +61,27 @@ def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     body = {"index": None, "values": values_2d}
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add", headers=h, data=json.dumps(body)).raise_for_status()
 
-# ---- DELETE helpers ----
-def batch_delete_rows(drive_id, item_id, table_name, session_id, indices):
-    payload = {
-        "requests": [
-            {
-                "id": str(i+1),
-                "method": "DELETE",
-                "url": f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
-                "headers": { "workbook-session-id": session_id }
-            }
-            for i, idx in enumerate(indices)
-        ]
-    }
-    r = requests.post(f"{GRAPH_BASE}/$batch", headers=base_headers, data=json.dumps(payload))
-    if not r.ok:
-        print(f"[ERRO] $batch: {r.status_code} {r.text}")
+def get_table_range(drive_id, item_id, table_name, session_id):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range", headers=h).json().get("address")
+
+def get_worksheet_id(drive_id, item_id, session_id, sheet_name):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    sheets = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets", headers=h).json().get("value", [])
+    for s in sheets:
+        if s.get("name") == sheet_name:
+            return s.get("id")
+    raise Exception(f"Folha '{sheet_name}' não encontrada.")
+
+def clear_rows_in_range(drive_id, item_id, worksheet_id, range_address, session_id, num_cols, rows_to_clear):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    empty_values = [["" for _ in range(num_cols)] for _ in rows_to_clear]
+    body = {"values": empty_values}
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}/range(address='{range_address}')"
+    print(f"[DEBUG] PATCH URL: {url}")
+    print(f"[DEBUG] Clearing {len(rows_to_clear)} rows in range: {range_address}")
+    r = requests.patch(url, headers=h, data=json.dumps(body))
     r.raise_for_status()
-    resp = r.json()
-    for it in resp.get("responses", []):
-        if it.get("status") != 200:
-            print(f"[ERRO] Delete id {it.get('id')} status {it.get('status')}: {it.get('body')}")
 
 # ---- Utilidades ----
 def excel_value_to_date(v):
@@ -119,9 +117,8 @@ try:
     date_idx_dst = dst_headers.index(DATE_COLUMN)
 
     today = datetime.today()
-    last_day = monthrange(today.year, today.month)[1]
     month_start = datetime(today.year, today.month, 1).date()
-    month_end = datetime(today.year, today.month, last_day).date()
+    month_end = datetime(today.year, today.month, 31).date()
 
     src_rows = list_table_rows(drive_id, src_id, SRC_TABLE, src_sid)
     src_values = [r.get("values", [[]])[0] for r in src_rows]
@@ -136,24 +133,29 @@ try:
         print("Nada para importar.")
     else:
         dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
-        indices_to_delete = []
-        for i, r in enumerate(dst_rows):
+        rows_to_clear = []
+        for r in dst_rows:
             vals = (r.get("values", [[]])[0] or [])
             if len(vals) > date_idx_dst:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
-                    indices_to_delete.append(r.get("index", i))
+                    rows_to_clear.append(vals)
 
-        if indices_to_delete:
-            indices_to_delete = sorted(set(indices_to_delete))
-            print(f"[DEBUG] Vou apagar {len(indices_to_delete)} linhas do mês atual.")
+        if rows_to_clear:
 
-            CHUNK = 20
-            for i in range(0, len(indices_to_delete), CHUNK):
-                batch = indices_to_delete[i:i+CHUNK]
-                batch_delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, batch)
-
-            print(f"[OK] Apaguei {len(indices_to_delete)} linhas do mês atual no destino.")
+            range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
+            sheet_name = range_address.split("!")[0]
+            worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
+            # Ajustar range para não apagar cabeçalho
+            start_col = range_address.split("!")[1].split(":")[0][0]
+            end_col = range_address.split(":")[1][0]
+            start_row = 2  # começa na linha 2
+            end_row = start_row + len(rows_to_clear) - 1
+            clean_range = f"{start_col}{start_row}:{end_col}{end_row}"
+            print(f"[DEBUG] Worksheet: {sheet_name}, ID: {worksheet_id}")
+            print(f"[DEBUG] Range to clear: {clean_range}")
+            clear_rows_in_range(drive_id, dst_id, worksheet_id, clean_range, dst_sid, len(dst_headers), rows_to_clear)
+            print(f"[OK] Limpei {len(rows_to_clear)} linhas do mês atual no destino.")
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
