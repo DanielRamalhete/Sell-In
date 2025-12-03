@@ -83,6 +83,15 @@ def clear_rows_in_range(drive_id, item_id, worksheet_id, range_address, session_
     r = requests.patch(url, headers=h, data=json.dumps(body))
     r.raise_for_status()
 
+
+def delete_rows(drive_id, item_id, table_name, session_id, start_index, count):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    body = {"index": start_index, "count": count}
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/delete"
+    r = requests.post(url, headers=h, data=json.dumps(body))
+    r.raise_for_status()
+
+
 # ---- Utilidades ----
 def excel_value_to_date(v):
     if isinstance(v, (int, float)):
@@ -141,32 +150,33 @@ try:
                 if d and month_start <= d.date() <= month_end:
                     rows_to_clear.append(vals)
 
-        if rows_to_clear:     
+        if rows_to_clear:          
             
-            # Mostrar datas antes da ordenação
-            print("[DEBUG] Datas antes da ordenação:")
-            print([excel_value_to_date(vals[date_idx_dst]) for vals in rows_to_clear])
+        print(f"[DEBUG] Encontradas {len(rows_to_clear)} linhas do mês atual para apagar.")
 
-            # Ordenar por Data Entrega
-            rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
-    
-            # Mostrar datas depois da ordenação
-            print("[DEBUG] Datas depois da ordenação:")
-            print([excel_value_to_date(vals[date_idx_dst]) for vals in rows_to_clear])
+        # Ordenar por Data Entrega (já faz isso antes)
+        rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
 
-            range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
-            sheet_name = range_address.split("!")[0]
-            worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
-            # Ajustar range para não apagar cabeçalho
-            start_col = range_address.split("!")[1].split(":")[0][0]
-            end_col = range_address.split(":")[1][0]
-            start_row = 2  # começa na linha 2
-            end_row = start_row + len(rows_to_clear) - 1
-            clean_range = f"{start_col}{start_row}:{end_col}{end_row}"
-            print(f"[DEBUG] Worksheet: {sheet_name}, ID: {worksheet_id}")
-            print(f"[DEBUG] Range to clear: {clean_range}")
-            clear_rows_in_range(drive_id, dst_id, worksheet_id, clean_range, dst_sid, len(dst_headers), rows_to_clear)
-            print(f"[OK] Limpei {len(rows_to_clear)} linhas do mês atual no destino.")
+        # Calcular índices das linhas a apagar
+        # Cada elemento em dst_rows tem um "index" que indica a posição na tabela
+        indices_to_delete = [r.get("index") for r in dst_rows if r.get("values", [[]])[0] in rows_to_clear]
+
+        if indices_to_delete:
+            # Agrupar deletes consecutivos para eficiência
+            indices_to_delete.sort()
+            start = indices_to_delete[0]
+            count = 1
+                for i in range(1, len(indices_to_delete)):
+                    if indices_to_delete[i] == indices_to_delete[i-1] + 1:
+                    count += 1
+                else:
+                    delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+                    start = indices_to_delete[i]
+                    count = 1
+            # Último grupo
+            delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+
+            print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
