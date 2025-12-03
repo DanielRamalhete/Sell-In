@@ -63,12 +63,27 @@ def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     body = {"index": None, "values": values_2d}
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add", headers=h, data=json.dumps(body)).raise_for_status()
 
-def delete_rows(drive_id, item_id, table_name, session_id, start_index, count):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    body = {"index": start_index, "count": count}
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/delete"
-    r = requests.post(url, headers=h, data=json.dumps(body))
+# ---- DELETE helpers ----
+def batch_delete_rows(drive_id, item_id, table_name, session_id, indices):
+    payload = {
+        "requests": [
+            {
+                "id": str(i+1),
+                "method": "DELETE",
+                "url": f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
+                "headers": { "workbook-session-id": session_id }
+            }
+            for i, idx in enumerate(indices)
+        ]
+    }
+    r = requests.post(f"{GRAPH_BASE}/$batch", headers=base_headers, data=json.dumps(payload))
+    if not r.ok:
+        print(f"[ERRO] $batch: {r.status_code} {r.text}")
     r.raise_for_status()
+    resp = r.json()
+    for it in resp.get("responses", []):
+        if it.get("status") != 200:
+            print(f"[ERRO] Delete id {it.get('id')} status {it.get('status')}: {it.get('body')}")
 
 # ---- Utilidades ----
 def excel_value_to_date(v):
@@ -121,32 +136,24 @@ try:
         print("Nada para importar.")
     else:
         dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
-        rows_to_clear = []
-        for r in dst_rows:
+        indices_to_delete = []
+        for i, r in enumerate(dst_rows):
             vals = (r.get("values", [[]])[0] or [])
             if len(vals) > date_idx_dst:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
-                    rows_to_clear.append(r)
+                    indices_to_delete.append(r.get("index", i))
 
-        if rows_to_clear:
-            print(f"[DEBUG] Encontradas {len(rows_to_clear)} linhas do mês atual para apagar.")
-            indices_to_delete = [r.get("index") for r in rows_to_clear]
-            indices_to_delete.sort()
+        if indices_to_delete:
+            indices_to_delete = sorted(set(indices_to_delete))
+            print(f"[DEBUG] Vou apagar {len(indices_to_delete)} linhas do mês atual.")
 
-            # Agrupar deletes consecutivos
-            start = indices_to_delete[0]
-            count = 1
-            for i in range(1, len(indices_to_delete)):
-                if indices_to_delete[i] == indices_to_delete[i-1] + 1:
-                    count += 1
-                else:
-                    delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
-                    start = indices_to_delete[i]
-                    count = 1
-            delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+            CHUNK = 20
+            for i in range(0, len(indices_to_delete), CHUNK):
+                batch = indices_to_delete[i:i+CHUNK]
+                batch_delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, batch)
 
-            print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
+            print(f"[OK] Apaguei {len(indices_to_delete)} linhas do mês atual no destino.")
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
