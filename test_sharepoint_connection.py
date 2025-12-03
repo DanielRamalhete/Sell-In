@@ -143,6 +143,10 @@ try:
                     rows_to_clear.append(vals)
 
         if rows_to_clear:
+            
+            # Ordenar rows_to_clear por Data Entrega (crescente)
+            rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
+
             range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
             sheet_name = range_address.split("!")[0]
             worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
