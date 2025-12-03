@@ -1,5 +1,7 @@
+
 import os, json, requests, msal
 from datetime import datetime, timedelta
+from calendar import monthrange
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -61,36 +63,12 @@ def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     body = {"index": None, "values": values_2d}
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add", headers=h, data=json.dumps(body)).raise_for_status()
 
-def get_table_range(drive_id, item_id, table_name, session_id):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range", headers=h).json().get("address")
-
-def get_worksheet_id(drive_id, item_id, session_id, sheet_name):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    sheets = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets", headers=h).json().get("value", [])
-    for s in sheets:
-        if s.get("name") == sheet_name:
-            return s.get("id")
-    raise Exception(f"Folha '{sheet_name}' não encontrada.")
-
-def clear_rows_in_range(drive_id, item_id, worksheet_id, range_address, session_id, num_cols, rows_to_clear):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    empty_values = [["" for _ in range(num_cols)] for _ in rows_to_clear]
-    body = {"values": empty_values}
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}/range(address='{range_address}')"
-    print(f"[DEBUG] PATCH URL: {url}")
-    print(f"[DEBUG] Clearing {len(rows_to_clear)} rows in range: {range_address}")
-    r = requests.patch(url, headers=h, data=json.dumps(body))
-    r.raise_for_status()
-
-
 def delete_rows(drive_id, item_id, table_name, session_id, start_index, count):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     body = {"index": start_index, "count": count}
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/delete"
     r = requests.post(url, headers=h, data=json.dumps(body))
     r.raise_for_status()
-
 
 # ---- Utilidades ----
 def excel_value_to_date(v):
@@ -126,8 +104,9 @@ try:
     date_idx_dst = dst_headers.index(DATE_COLUMN)
 
     today = datetime.today()
+    last_day = monthrange(today.year, today.month)[1]
     month_start = datetime(today.year, today.month, 1).date()
-    month_end = datetime(today.year, today.month, 31).date()
+    month_end = datetime(today.year, today.month, last_day).date()
 
     src_rows = list_table_rows(drive_id, src_id, SRC_TABLE, src_sid)
     src_values = [r.get("values", [[]])[0] for r in src_rows]
@@ -148,35 +127,26 @@ try:
             if len(vals) > date_idx_dst:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
-                    rows_to_clear.append(vals)
+                    rows_to_clear.append(r)
 
-        if rows_to_clear:          
-            
+        if rows_to_clear:
             print(f"[DEBUG] Encontradas {len(rows_to_clear)} linhas do mês atual para apagar.")
+            indices_to_delete = [r.get("index") for r in rows_to_clear]
+            indices_to_delete.sort()
 
-            # Ordenar por Data Entrega (já faz isso antes)
-            rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
+            # Agrupar deletes consecutivos
+            start = indices_to_delete[0]
+            count = 1
+            for i in range(1, len(indices_to_delete)):
+                if indices_to_delete[i] == indices_to_delete[i-1] + 1:
+                    count += 1
+                else:
+                    delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+                    start = indices_to_delete[i]
+                    count = 1
+            delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
 
-            # Calcular índices das linhas a apagar
-            # Cada elemento em dst_rows tem um "index" que indica a posição na tabela
-            indices_to_delete = [r.get("index") for r in dst_rows if r.get("values", [[]])[0] in rows_to_clear]
-
-            if indices_to_delete:
-                # Agrupar deletes consecutivos para eficiência
-                indices_to_delete.sort()
-                start = indices_to_delete[0]
-                count = 1
-                    for i in range(1, len(indices_to_delete)):
-                        if indices_to_delete[i] == indices_to_delete[i-1] + 1:
-                        count += 1
-                    else:
-                        delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
-                        start = indices_to_delete[i]
-                        count = 1
-                # Último grupo
-                delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
-
-                print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
+            print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
