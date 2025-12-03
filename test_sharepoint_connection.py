@@ -142,10 +142,19 @@ try:
                 if d and month_start <= d.date() <= month_end:
                     rows_to_clear.append(vals)
 
-        if rows_to_clear:
-            
-            # Ordenar rows_to_clear por Data Entrega (crescente)
+        
+    if rows_to_clear:
+            # Mostrar datas antes da ordenação
+            print("[DEBUG] Datas antes da ordenação:")
+            print([excel_value_to_date(vals[date_idx_dst]) for vals in rows_to_clear])
+
+            # Ordenar por Data Entrega
             rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
+
+            # Mostrar datas depois da ordenação
+            print("[DEBUG] Datas depois da ordenação:")
+            print([excel_value_to_date(vals[date_idx_dst]) for vals in rows_to_clear])
+
 
             range_address = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)
             sheet_name = range_address.split("!")[0]
