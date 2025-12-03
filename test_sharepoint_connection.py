@@ -152,31 +152,31 @@ try:
 
         if rows_to_clear:          
             
-        print(f"[DEBUG] Encontradas {len(rows_to_clear)} linhas do mês atual para apagar.")
+            print(f"[DEBUG] Encontradas {len(rows_to_clear)} linhas do mês atual para apagar.")
 
-        # Ordenar por Data Entrega (já faz isso antes)
-        rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
+            # Ordenar por Data Entrega (já faz isso antes)
+            rows_to_clear.sort(key=lambda vals: excel_value_to_date(vals[date_idx_dst]) or datetime.min)
 
-        # Calcular índices das linhas a apagar
-        # Cada elemento em dst_rows tem um "index" que indica a posição na tabela
-        indices_to_delete = [r.get("index") for r in dst_rows if r.get("values", [[]])[0] in rows_to_clear]
+            # Calcular índices das linhas a apagar
+            # Cada elemento em dst_rows tem um "index" que indica a posição na tabela
+            indices_to_delete = [r.get("index") for r in dst_rows if r.get("values", [[]])[0] in rows_to_clear]
 
-        if indices_to_delete:
-            # Agrupar deletes consecutivos para eficiência
-            indices_to_delete.sort()
-            start = indices_to_delete[0]
-            count = 1
-                for i in range(1, len(indices_to_delete)):
-                    if indices_to_delete[i] == indices_to_delete[i-1] + 1:
-                    count += 1
-                else:
-                    delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
-                    start = indices_to_delete[i]
-                    count = 1
-            # Último grupo
-            delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+            if indices_to_delete:
+                # Agrupar deletes consecutivos para eficiência
+                indices_to_delete.sort()
+                start = indices_to_delete[0]
+                count = 1
+                    for i in range(1, len(indices_to_delete)):
+                        if indices_to_delete[i] == indices_to_delete[i-1] + 1:
+                        count += 1
+                    else:
+                        delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
+                        start = indices_to_delete[i]
+                        count = 1
+                # Último grupo
+                delete_rows(drive_id, dst_id, DST_TABLE, dst_sid, start, count)
 
-            print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
+                print(f"[OK] Apaguei {len(rows_to_clear)} linhas do mês atual no destino.")
 
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
