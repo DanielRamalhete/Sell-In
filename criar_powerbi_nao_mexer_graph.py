@@ -27,7 +27,7 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
 MAX_ROWS_READ = int(os.getenv("MAX_ROWS_READ", "2000"))
 
 # Folhas e colunas
-SHEET_SOURCE  = "Resumo Plano atual"
+SHEET_SOURCE  = "Resumo Plano anual"
 SHEET_TARGET  = "PowerBI"
 
 COL_MARCAS    = "Marcas"
