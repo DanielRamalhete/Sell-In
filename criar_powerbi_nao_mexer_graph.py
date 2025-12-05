@@ -21,7 +21,7 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()] or [
     "General/Teste - Daniel PowerAutomate/5. Planos Anuais/TNAIA",
 ]
 
-SHEET_SOURCE  = "Resumo Plano atual"
+SHEET_SOURCE  = "Resumo Plano anual"
 SHEET_TARGET  = "PowerBI Nao Mexer"
 
 COL_MARCAS    = "Marcas"
