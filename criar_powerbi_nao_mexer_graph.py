@@ -188,7 +188,7 @@ def main():
     print(f"[DEBUG] SITE_PATH={SITE_PATH}")
     print(f"[DEBUG] MAX_ROWS_READ={MAX_ROWS_READ}")
 
-    token    = acquire_token()
+    token = token_result["access_token"]
     site_id  = get_site_id()
     drive_id = get_drive_id(site_id)
 
