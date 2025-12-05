@@ -38,7 +38,7 @@ jobs:
 
       - name: Executar geração das folhas PowerBI
         run: |
-          python planos-anuais.py
+          python criar_powerbi_nao_mexer_graph.py
 
   consolidar_powerbi:
     runs-on: ubuntu-latest
