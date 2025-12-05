@@ -20,7 +20,7 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
 
 # Ficheiro consolidado (na mesma drive "Documentos Partilhados")
 CONSOLIDATE_FILE_PATH  = os.getenv("CONSOLIDATE_FILE_PATH", "").strip()
-CONSOLIDATE_SHEET_NAME = os.getenv("CONSOLIDATE_SHEET_NAME", "Consolidado").strip()
+CONSOLIDATE_SHEET_NAME = os.getenv("CONSOLIDATE_SHEET_NAME", "Planos").strip()
 
 # Folhas e colunas esperadas
 SOURCE_SHEET = "PowerBI Nao Mexer"
