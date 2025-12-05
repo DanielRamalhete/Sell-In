@@ -29,7 +29,7 @@ MAX_ROWS_READ = int(os.getenv("MAX_ROWS_READ", "2000"))
 # Folhas e colunas
 # Agora aceitamos duas alternativas para a folha de origem:
 SHEET_SOURCE_ALTS = ["Resumo Plano anual", "Folha1"]
-SHEET_TARGET  = "PowerBI"
+SHEET_TARGET  = "PowerBI Nao Mexer"
 
 COL_MARCAS    = "Marcas"
 VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
