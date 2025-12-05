@@ -1,5 +1,5 @@
 
-import os, json, urllib.parse, requests
+import os, json, urllib.parse, requests, msal
 import pandas as pd
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
