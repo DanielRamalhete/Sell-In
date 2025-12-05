@@ -28,7 +28,7 @@ MAX_ROWS_READ = int(os.getenv("MAX_ROWS_READ", "2000"))
 
 # Folhas e colunas
 SHEET_SOURCE  = "Resumo Plano atual"
-SHEET_TARGET  = "PowerBI Nao Mexer"
+SHEET_TARGET  = "PowerBI"
 
 COL_MARCAS    = "Marcas"
 VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
