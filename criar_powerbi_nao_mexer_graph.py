@@ -29,17 +29,13 @@ VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
 PCT_COLS      = [f"{c}%" for c in VAL_COLS]
 
 # ========= AUTH (MSAL-like) =========
-def acquire_token():
-    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "scope": "https://graph.microsoft.com/.default"
-    }
-    r = requests.post(url, data=data)
-    r.raise_for_status()
-    return r.json()["access_token"]
+app = msal.ConfidentialClientApplication(
+    CLIENT_ID, authority=f"https://login.microsoftonline.com/{TENANT_ID}",
+    client_credential=CLIENT_SECRET
+)
+token_result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+token = token_result["access_token"]
+base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # ========= HELPERS Graph =========
 def get_site_id(token):
@@ -190,7 +186,6 @@ def build_output_from_values(values_rows):
 
 # ========= MAIN =========
 def main():
-    token = acquire_token()
     base_headers = {"Authorization": f"Bearer {token}"}
     site_id  = get_site_id(token)
     drive_id = get_drive_id(token, site_id, drive_name="Documentos Partilhados")
