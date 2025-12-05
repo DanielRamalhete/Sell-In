@@ -41,14 +41,8 @@ base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application
 def get_site_id():
     return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
 
-def get_drive_id(token, site_id, drive_name="Documentos Partilhados"):
-    url = f"{GRAPH_BASE}/sites/{site_id}/drives"
-    h = {"Authorization": f"Bearer {token}"}
-    r = requests.get(url, headers=h); r.raise_for_status()
-    for d in r.json().get("value", []):
-        if d.get("name") == drive_name:
-            return d["id"]
-    raise RuntimeError(f"Drive '{drive_name}' não encontrada.")
+def get_drive_id(site_id):
+    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
 
 def get_item_id_by_drive_path(token, drive_id, drive_relative_path):
     # drive_relative_path: "General/.../Ficheiro.xlsx"
@@ -186,7 +180,7 @@ def main():
     token = token_result["access_token"]
     base_headers = {"Authorization": f"Bearer {token}"}
     site_id  = get_site_id()
-    drive_id = get_drive_id(token, site_id, drive_name="Documentos Partilhados")
+    drive_id = get_drive_id(site_id)
 
     total_files = 0
     ok_files    = 0
