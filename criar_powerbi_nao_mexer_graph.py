@@ -38,12 +38,8 @@ token = token_result["access_token"]
 base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # ========= HELPERS Graph =========
-def get_site_id(token):
-    url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}"
-    h = {"Authorization": f"Bearer {token}"}
-    r = requests.get(url, headers=h); r.raise_for_status()
-    return r.json()["id"]
-    raise RuntimeError(f"Erro Aqui")
+def get_site_id():
+    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
 
 def get_drive_id(token, site_id, drive_name="Documentos Partilhados"):
     url = f"{GRAPH_BASE}/sites/{site_id}/drives"
