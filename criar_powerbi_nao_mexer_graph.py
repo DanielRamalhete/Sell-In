@@ -185,7 +185,7 @@ def build_output_from_values(values_rows):
 def main():
     token = token_result["access_token"]
     base_headers = {"Authorization": f"Bearer {token}"}
-    site_id  = get_site_id(token)
+    site_id  = get_site_id()
     drive_id = get_drive_id(token, site_id, drive_name="Documentos Partilhados")
 
     total_files = 0
