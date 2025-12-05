@@ -27,12 +27,16 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
 MAX_ROWS_READ = int(os.getenv("MAX_ROWS_READ", "2000"))
 
 # Folhas e colunas
-SHEET_SOURCE  = "Resumo Plano anual"
+# Agora aceitamos duas alternativas para a folha de origem:
+SHEET_SOURCE_ALTS = ["Resumo Plano anual", "Folha1"]
 SHEET_TARGET  = "PowerBI"
 
 COL_MARCAS    = "Marcas"
 VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
 PCT_COLS      = [f"{c}%" for c in VAL_COLS]
+
+# Novas colunas
+EXTRA_COLS    = ["Valor B3", "Pasta"]  # nomes das duas novas colunas
 
 # ========= AUTH (MSAL) =========
 # ---- Autenticação (mantida como tinhas) ----
@@ -173,7 +177,8 @@ def build_output_from_values(values_rows: list[list]) -> list[list]:
     """
     values_rows: linhas [Marcas, 4Q2025, 1Q2026, 2Q2026, 3Q2026, FY 2026]
     Estrutura: pares consecutivos — aceita [% , valores] OU [valores , %]
-    Output: [Marcas, 4Q2025, 1Q2026, 2Q2026, 3Q2026, FY 2026, 4Q2025%, 1Q2026%, 2Q2026%, 3Q2026%, FY 2026%]
+    Output base (antes das novas colunas): 
+      [Marcas, 4Q2025, 1Q2026, 2Q2026, 3Q2026, FY 2026, 4Q2025%, 1Q2026%, 2Q2026%, 3Q2026%, FY 2026%]
     """
     out = []
     i = 0
@@ -210,7 +215,7 @@ def build_output_from_values(values_rows: list[list]) -> list[list]:
 
     return out
 
-def pad_row(r, width=11):
+def pad_row(r, width=13):
     rr = list(r)
     if len(rr) < width:
         rr.extend([None] * (width - len(rr)))
@@ -249,6 +254,9 @@ def main():
             print(f"  [ERRO] A aceder à pasta: {e}")
             continue
 
+        # Nome simples da pasta (último segmento)
+        folder_name_simple = folder.rsplit("/", 1)[-1] if "/" in folder else folder
+
         for it in items:
             name    = it.get("name", "")
             item_id = it.get("id")
@@ -257,12 +265,27 @@ def main():
 
             sess_id = create_session(token, drive_id, item_id, persist=True)
             try:
-                # 1) Worksheet origem
-                ws_src_id = get_worksheet_id_by_name(token, drive_id, item_id, sess_id, SHEET_SOURCE)
+                # 1) Worksheet origem: tenta alternativas
+                ws_src_id = None
+                sheet_used = None
+                for candidate in SHEET_SOURCE_ALTS:
+                    ws_src_id = get_worksheet_id_by_name(token, drive_id, item_id, sess_id, candidate)
+                    if ws_src_id:
+                        sheet_used = candidate
+                        break
                 if not ws_src_id:
-                    raise RuntimeError(f"Folha '{SHEET_SOURCE}' não encontrada.")
+                    raise RuntimeError(f"Folha de origem não encontrada (tentadas: {SHEET_SOURCE_ALTS}).")
+                print(f"[DEBUG] Folha de origem usada: '{sheet_used}' (id={ws_src_id})")
 
-                # 2) Ler cabeçalho B5:G5
+                # 2) Ler B3 (valor a replicar em todas as linhas)
+                b3_vals = get_range_values(token, drive_id, item_id, sess_id, ws_src_id, "B3:B3")
+                b3_value = None
+                if b3_vals and b3_vals[0]:
+                    b3_value = b3_vals[0][0]
+                print(f"[DEBUG] Valor B3 lido: {b3_value!r}")
+                print(f"[DEBUG] Nome da pasta (extra coluna): {folder_name_simple!r}")
+
+                # 3) Ler cabeçalho B5:G5
                 header_vals = get_range_values(token, drive_id, item_id, sess_id, ws_src_id, "B5:G5")
                 header = [str(x).replace("\xa0"," ").strip() for x in (header_vals[0] if header_vals else [])]
                 expected = [COL_MARCAS] + VAL_COLS
@@ -272,7 +295,7 @@ def main():
                 if header != expected_norm:
                     raise RuntimeError(f"Header inesperado.\nEsperado: {expected_norm}\nEncontrado: {header}")
 
-                # 3) Ler corpo B6:G{fim}
+                # 4) Ler corpo B6:G{fim}
                 end_row = 6 + MAX_ROWS_READ - 1
                 body_addr = f"B6:G{end_row}"
                 body_vals = get_range_values(token, drive_id, item_id, sess_id, ws_src_id, body_addr)
@@ -282,27 +305,33 @@ def main():
                 print(f"[DEBUG] Linhas lidas do corpo: {len(body_vals)} | após limpeza: {len(clean_rows)}")
 
                 out_rows = build_output_from_values(clean_rows)
-                print(f"[DEBUG] Registos de marcas calculados: {len(out_rows)}")
+                print(f"[DEBUG] Registos de marcas calculados (antes dos extras): {len(out_rows)}")
                 if out_rows:
-                    print(f"[DEBUG] Primeiro registo (preview): {out_rows[0]}")
+                    print(f"[DEBUG] Primeiro registo base (preview): {out_rows[0]}")
 
-                # 4) Preparar destino: recriar folha para evitar resíduos
+                # 5) Adicionar colunas extra (B3 e Pasta) no fim de cada linha
+                # Base tem 11 colunas; com 2 extras → 13 colunas
+                out_rows = [list(r) + [b3_value, folder_name_simple] for r in out_rows]
+                if out_rows:
+                    print(f"[DEBUG] Primeiro registo com extras (preview): {out_rows[0]}")
+
+                # 6) Preparar destino: recriar folha para evitar resíduos
                 ws_dst_id = get_worksheet_id_by_name(token, drive_id, item_id, sess_id, SHEET_TARGET)
                 if ws_dst_id:
                     delete_worksheet(token, drive_id, item_id, sess_id, ws_dst_id)
                 ws_dst_id = add_worksheet(token, drive_id, item_id, sess_id, SHEET_TARGET)
 
-                # 5) Escrever cabeçalho + dados (A1:K...)
-                header_out = [COL_MARCAS] + VAL_COLS + PCT_COLS
-                patch_range_values(token, drive_id, item_id, sess_id, ws_dst_id, "A1:K1", [pad_row(header_out, 11)])
+                # 7) Escrever cabeçalho + dados (A1:M...)
+                header_out = [COL_MARCAS] + VAL_COLS + PCT_COLS + EXTRA_COLS
+                patch_range_values(token, drive_id, item_id, sess_id, ws_dst_id, "A1:M1", [pad_row(header_out, 13)])
 
                 if out_rows:
-                    # garantir 11 colunas (A..K)
-                    out_rows = [pad_row(r, 11) for r in out_rows]
+                    # garantir 13 colunas (A..M)
+                    out_rows = [pad_row(r, 13) for r in out_rows]
                     # corrigido off-by-one: última linha = 1 + len(out_rows)
                     end_out = 1 + len(out_rows)
-                    addr_out = f"A2:K{end_out}"
-                    print(f"[DEBUG] Vou escrever {len(out_rows)} linhas x 11 colunas em {addr_out}")
+                    addr_out = f"A2:M{end_out}"
+                    print(f"[DEBUG] Vou escrever {len(out_rows)} linhas x 13 colunas em {addr_out}")
                     patch_range_values(token, drive_id, item_id, sess_id, ws_dst_id, addr_out, out_rows)
 
                 print(f"     [OK] {len(out_rows)} marcas → folha '{SHEET_TARGET}' escrita.")
