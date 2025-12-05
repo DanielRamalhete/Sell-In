@@ -39,7 +39,7 @@ base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application
 
 # ========= HELPERS Graph =========
 def get_site_id(token):
-    url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/sites/{SITE_PATH}"
+    url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}"
     h = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=h); r.raise_for_status()
     return r.json()["id"]
