@@ -35,18 +35,14 @@ VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
 PCT_COLS      = [f"{c}%" for c in VAL_COLS]
 
 # ========= AUTH (MSAL) =========
-def acquire_token() -> str:
-    if not (TENANT_ID and CLIENT_ID and CLIENT_SECRET):
-        raise RuntimeError("TENANT_ID/CLIENT_ID/CLIENT_SECRET não definidos.")
-    app = msal.ConfidentialClientApplication(
-        CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{TENANT_ID}",
-        client_credential=CLIENT_SECRET
-    )
-    result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-    if "access_token" not in result:
-        raise RuntimeError(f"Falha ao obter token: {result}")
-    return result["access_token"]
+# ---- Autenticação ----
+app = msal.ConfidentialClientApplication(
+    CLIENT_ID, authority=f"https://login.microsoftonline.com/{TENANT_ID}",
+    client_credential=CLIENT_SECRET
+)
+token_result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+token = token_result["access_token"]
+base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # ========= HELPERS Graph =========
 def get_site_id():
