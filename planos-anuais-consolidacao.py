@@ -13,7 +13,7 @@ CLIENT_ID     = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
 SITE_HOSTNAME = os.getenv("SITE_HOSTNAME", "").strip()
-SITE_PATH     = os.getenv("SITE_PATH_W", "").strip()
+SITE_PATH     = os.getenv("SITE_PATH_W", "sites/geral.brands").strip()
 
 FOLDERS_ENV   = os.getenv("DRIVE_RELATIVE_FOLDERS", "")
 DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
