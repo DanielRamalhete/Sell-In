@@ -23,7 +23,7 @@ CONSOLIDATE_FILE_PATH  = os.getenv("CONSOLIDATE_FILE_PATH", "").strip()
 CONSOLIDATE_SHEET_NAME = os.getenv("CONSOLIDATE_SHEET_NAME", "Consolidado").strip()
 
 # Folhas e colunas esperadas
-SOURCE_SHEET = "PowerBI"
+SOURCE_SHEET = "PowerBI Nao Mexer"
 
 COL_MARCAS    = "Marcas"
 VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
