@@ -36,7 +36,7 @@ VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
 PCT_COLS      = [f"{c}%" for c in VAL_COLS]
 
 # Novas colunas
-EXTRA_COLS    = ["Valor B3", "Pasta"]  # nomes das duas novas colunas
+EXTRA_COLS    = ["Farmácias", "GSI"]  # nomes das duas novas colunas
 
 # ========= AUTH (MSAL) =========
 # ---- Autenticação (mantida como tinhas) ----
