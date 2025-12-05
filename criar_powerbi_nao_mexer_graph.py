@@ -27,7 +27,6 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
 MAX_ROWS_READ = int(os.getenv("MAX_ROWS_READ", "2000"))
 
 # Folhas e colunas
-# Agora aceitamos duas alternativas para a folha de origem:
 SHEET_SOURCE_ALTS = ["Resumo Plano anual", "Folha1"]
 SHEET_TARGET  = "PowerBI Nao Mexer"
 
@@ -223,6 +222,26 @@ def pad_row(r, width=13):
         rr = rr[:width]
     return rr
 
+def filename_without_ext(filename: str) -> str:
+    # remove extensão .xlsx ou .xlsm (case-insensitive); se não tiver, devolve o próprio nome
+    lower = filename.lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xlsm"):
+        return filename.rsplit(".", 1)[0]
+    return filename
+
+def is_empty_or_zero(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, (int, float)):
+        return float(v) == 0.0
+    s = str(v).strip().replace("\xa0", " ")
+    if s == "":
+        return True
+    try:
+        return float(s.replace(",", ".")) == 0.0
+    except:
+        return False
+
 # ========= MAIN =========
 def main():
     # Validação mínima de config
@@ -277,12 +296,18 @@ def main():
                     raise RuntimeError(f"Folha de origem não encontrada (tentadas: {SHEET_SOURCE_ALTS}).")
                 print(f"[DEBUG] Folha de origem usada: '{sheet_used}' (id={ws_src_id})")
 
-                # 2) Ler B3 (valor a replicar em todas as linhas)
+                # 2) Ler B3 (valor base)
                 b3_vals = get_range_values(token, drive_id, item_id, sess_id, ws_src_id, "B3:B3")
                 b3_value = None
                 if b3_vals and b3_vals[0]:
                     b3_value = b3_vals[0][0]
-                print(f"[DEBUG] Valor B3 lido: {b3_value!r}")
+                # 2.1) Fallback: se B3 vazio/zero, usar nome do ficheiro sem extensão
+                if is_empty_or_zero(b3_value):
+                    b3_value_final = filename_without_ext(name)
+                    print(f"[DEBUG] B3 vazio/zero → a usar nome do ficheiro: {b3_value_final!r}")
+                else:
+                    b3_value_final = b3_value
+                    print(f"[DEBUG] Valor B3 lido: {b3_value_final!r}")
                 print(f"[DEBUG] Nome da pasta (extra coluna): {folder_name_simple!r}")
 
                 # 3) Ler cabeçalho B5:G5
@@ -309,9 +334,9 @@ def main():
                 if out_rows:
                     print(f"[DEBUG] Primeiro registo base (preview): {out_rows[0]}")
 
-                # 5) Adicionar colunas extra (B3 e Pasta) no fim de cada linha
+                # 5) Adicionar colunas extra (B3_final e Pasta) no fim de cada linha
                 # Base tem 11 colunas; com 2 extras → 13 colunas
-                out_rows = [list(r) + [b3_value, folder_name_simple] for r in out_rows]
+                out_rows = [list(r) + [b3_value_final, folder_name_simple] for r in out_rows]
                 if out_rows:
                     print(f"[DEBUG] Primeiro registo com extras (preview): {out_rows[0]}")
 
