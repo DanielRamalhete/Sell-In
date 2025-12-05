@@ -1,0 +1,29 @@
+
+name: Atualizar PowerBI Nao Mexer
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas openpyxl
+
+      - name: Run script
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
+          SITE_PATH: ${{ secrets.SITE_PATH }}
+          DRIVE_RELATIVE_FOLDERS: ${{ secrets.DRIVE_RELATIVE_FOLDERS }}
+        run: |
+          python criar_powerbi_nao_mexer_graph.py
