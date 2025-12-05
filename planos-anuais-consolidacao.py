@@ -20,7 +20,11 @@ DRIVE_FOLDERS = [p.strip() for p in FOLDERS_ENV.split(";") if p.strip()]
 
 # Ficheiro consolidado (na mesma drive "Documentos Partilhados")
 CONSOLIDATE_FILE_PATH  = os.getenv("CONSOLIDATE_FILE_PATH", "").strip()
-CONSOLIDATE_SHEET_NAME = os.getenv("CONSOLIDATE_SHEET_NAME", "Planos").strip()
+
+# Nome da folha de consolidação (env) — default para "Planos" como pediste
+# (tolerância opcional a typo CONSOLIDADE_SHEET_NAME)
+_sheet_name_env = os.getenv("CONSOLIDATE_SHEET_NAME") or os.getenv("CONSOLIDADE_SHEET_NAME")
+CONSOLIDATE_SHEET_NAME = (_sheet_name_env or "Planos").strip()
 
 # Folhas e colunas esperadas
 SOURCE_SHEET = "PowerBI Nao Mexer"
@@ -39,6 +43,8 @@ app = msal.ConfidentialClientApplication(
     client_credential=CLIENT_SECRET
 )
 token_result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+if "access_token" not in token_result:
+    raise RuntimeError(f"Falha a obter token: {token_result.get('error')} - {token_result.get('error_description')}")
 token = token_result["access_token"]
 base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -117,6 +123,12 @@ def add_worksheet(token: str, drive_id: str, item_id: str, session_id: str, shee
     r = requests.post(url, headers=h, data=json.dumps({"name": sheet_name})); r.raise_for_status()
     return r.json()["id"]
 
+def delete_worksheet(token: str, drive_id: str, item_id: str, session_id: str, worksheet_id: str):
+    h = {"Authorization": f"Bearer {token}", "workbook-session-id": session_id}
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}"
+    r = requests.delete(url, headers=h)  # 204 esperado; ignoramos falhas leves
+    print(f"[DEBUG] DELETE worksheet id={worksheet_id} (status {r.status_code})")
+
 def get_range_values(token: str, drive_id: str, item_id: str, session_id: str, worksheet_id: str, address: str) -> list[list]:
     h = {"Authorization": f"Bearer {token}", "workbook-session-id": session_id}
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}/range(address='{address}')"
@@ -170,7 +182,8 @@ def main():
     print(f"[DEBUG] SITE_HOSTNAME={SITE_HOSTNAME}")
     print(f"[DEBUG] SITE_PATH={SITE_PATH}")
     print(f"[DEBUG] Pastas: {len(DRIVE_FOLDERS)} → {DRIVE_FOLDERS}")
-    print(f"[DEBUG] Consolidado: {CONSOLIDATE_FILE_PATH} | folha='{CONSOLIDATE_SHEET_NAME}'")
+    print(f"[DEBUG] CONSOLIDATE_FILE_PATH={CONSOLIDATE_FILE_PATH!r}")
+    print(f"[DEBUG] CONSOLIDATE_SHEET_NAME efetivo: {CONSOLIDATE_SHEET_NAME!r}")
 
     site_id  = get_site_id()
     drive_id = get_drive_id(site_id)
@@ -182,35 +195,20 @@ def main():
     cons_sess_id = create_session(token, drive_id, cons_item_id, persist=True)
 
     try:
-        # Garantir folha de destino
+        # >>> Overwrite total: Delete + Add da folha
         cons_ws_id = get_worksheet_id_by_name(token, drive_id, cons_item_id, cons_sess_id, CONSOLIDATE_SHEET_NAME)
-        if not cons_ws_id:
-            cons_ws_id = add_worksheet(token, drive_id, cons_item_id, cons_sess_id, CONSOLIDATE_SHEET_NAME)
-            print(f"[DEBUG] Folha consolidada criada: id={cons_ws_id}")
+        if cons_ws_id:
+            print(f"[DEBUG] Overwrite: a eliminar folha '{CONSOLIDATE_SHEET_NAME}' (id={cons_ws_id})")
+            delete_worksheet(token, drive_id, cons_item_id, cons_sess_id, cons_ws_id)
 
-        # Cabeçalho: se vazio ou diferente, escrever
-        used = get_used_range(token, drive_id, cons_item_id, cons_sess_id, cons_ws_id)
-        cons_vals = used.get("values", [])
-        existing_rows = len(cons_vals)
-        print(f"[DEBUG] Consolidado usedRange: {existing_rows} linhas")
+        cons_ws_id = add_worksheet(token, drive_id, cons_item_id, cons_sess_id, CONSOLIDATE_SHEET_NAME)
+        print(f"[DEBUG] Folha recriada: '{CONSOLIDATE_SHEET_NAME}' (id={cons_ws_id})")
 
+        # Escrever cabeçalho (A1:M1) e preparar próxima linha
         header_out = [pad_row(ALL_COLS, COL_COUNT)]
-        if existing_rows == 0:
-            patch_range_values(token, drive_id, cons_item_id, cons_sess_id, cons_ws_id, "A1:M1", header_out)
-            next_row = 2
-        else:
-            # validar cabeçalho existente
-            header_existing = [str(x).replace("\xa0"," ").strip() for x in (cons_vals[0] if cons_vals else [])]
-            header_expected = [str(x) for x in ALL_COLS]
-            print(f"[DEBUG] Header consolidado atual: {header_existing}")
-            print(f"[DEBUG] Header esperado: {header_expected}")
-            if header_existing != header_expected:
-                print("[WARN] Cabeçalho diferente — a substituir pelo esperado.")
-                patch_range_values(token, drive_id, cons_item_id, cons_sess_id, cons_ws_id, "A1:M1", header_out)
-            # próxima linha após dados existentes
-            data_rows = max(0, existing_rows - 1)
-            next_row = 2 + data_rows
-        print(f"[DEBUG] Próxima linha livre no consolidado: {next_row}")
+        patch_range_values(token, drive_id, cons_item_id, cons_sess_id, cons_ws_id, "A1:M1", header_out)
+        next_row = 2
+        # <<< Fim overwrite total
 
         total_appended = 0
 
@@ -239,27 +237,54 @@ def main():
 
                     # Ler usedRange da fonte
                     used_src = get_used_range(token, drive_id, item_id, src_sess_id, src_ws_id)
+                    print(f"     [DEBUG] usedRange address: {used_src.get('address')!r}")
                     src_vals = used_src.get("values", [])
                     if not src_vals or len(src_vals) <= 1:
                         print("     [INFO] Sem dados (apenas cabeçalho ou vazio).")
                         continue
 
-                    # Validar cabeçalho da fonte
-                    header_src = [str(x).replace("\xa0"," ").strip() for x in src_vals[0]]
-                    expected   = [str(x) for x in ALL_COLS]
-                    if header_src != expected:
-                        print("     [WARN] Cabeçalho 'PowerBI' diferente do esperado — a tentar mesmo assim.")
-                        # Podemos optar por normalizar ou falhar. Aqui seguimos.
+                    # Validar cabeçalho da fonte (com debug)
+                    def norm_cell(x):
+                        return str(x).replace("\xa0", " ").strip()
 
-                    # Filtrar linhas reais (da 2 em diante) e remover linhas totalmente vazias
-                    data_rows = [row for row in src_vals[1:] if any(c not in (None, "",) for c in row)]
-                    # Pad/truncate para 13 colunas
-                    data_rows = [pad_row(r, COL_COUNT) for r in data_rows]
+                    header_src = [norm_cell(x) for x in src_vals[0]]
+                    expected   = [norm_cell(x) for x in ALL_COLS]
+
+                    set_src = set(header_src)
+                    set_exp = set(expected)
+                    missing = [c for c in expected if c not in set_src]
+                    extra   = [c for c in header_src if c not in set_exp]
+                    order_diff = (header_src != expected)
+
+                    if missing or extra or order_diff:
+                        print("     [WARN] Cabeçalho 'PowerBI' divergente.")
+                        if missing:
+                            print(f"     [WARN]  - Faltam: {missing}")
+                        if extra:
+                            print(f"     [WARN]  - Extras: {extra}")
+                        if order_diff and not (missing or extra):
+                            print(f"     [INFO]  - Ordem diferente, mas mesmas colunas.")
+
+                    # Se faltarem colunas obrigatórias, ignorar o ficheiro
+                    if missing:
+                        print("     [ERRO] Há colunas obrigatórias em falta — a ignorar este ficheiro.")
+                        continue
+
+                    # Remapear dados para a ordem esperada (robusto contra ordem diferente)
+                    idx_map = {col: header_src.index(col) for col in expected}
+                    data_rows_src = [row for row in src_vals[1:] if any(c not in (None, "",) for c in row)]
+                    remapped_rows = []
+                    for r in data_rows_src:
+                        new_r = [ r[idx_map[col]] if idx_map[col] < len(r) else None for col in expected ]
+                        remapped_rows.append(new_r)
+
+                    # Pad/trunc para 13 colunas
+                    data_rows = [pad_row(r, COL_COUNT) for r in remapped_rows]
                     if not data_rows:
                         print("     [INFO] Sem linhas válidas após limpeza.")
                         continue
 
-                    # Escrever em blocos para evitar limites
+                    # Escrever em blocos
                     for chunk in chunk_rows(data_rows, size=4000):
                         end_row = next_row + len(chunk) - 1
                         addr_out = f"A{next_row}:M{end_row}"
