@@ -16,7 +16,7 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 SITE_HOSTNAME = os.getenv("SITE_HOSTNAME", "").strip()
 
 # Ex.: SITE_PATH="equipa.comite"  (ATENÇÃO: sem 'sites/' e sem URL completo)
-SITE_PATH     = os.getenv("SITE_PATH", "").strip()
+SITE_PATH     = os.getenv("SITE_PATH_W", "").strip()
 
 # Pastas relativas ao drive "Documentos Partilhados" (SEM %20), separadas por ';'
 # Ex.: "General/Teste - Daniel PowerAutomate/5. Planos Anuais/FMENEZES;General/.../GMALAFAYA;..."
