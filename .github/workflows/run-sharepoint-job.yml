@@ -15,7 +15,7 @@ env:
   DRIVE_RELATIVE_FOLDERS: ${{ secrets.DRIVE_RELATIVE_FOLDERS }}
   # Para o consolidado:
   CONSOLIDATE_FILE_PATH: ${{ secrets.CONSOLIDATE_FILE_PATH }}
-  CONSOLIDATE_SHEET_NAME: "Consolidado"
+  CONSOLIDATE_SHEET_NAME: ${{ secrets.CONSOLIDATE_SHEET_NAME }}
 
 
 jobs:
