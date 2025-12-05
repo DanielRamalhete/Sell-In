@@ -49,56 +49,11 @@ def acquire_token() -> str:
     return result["access_token"]
 
 # ========= HELPERS Graph =========
-def get_site_id(token: str) -> str:
-    """
-    Obtém o site_id de forma robusta:
-      - Normaliza SITE_PATH (remove 'sites/' se veio a mais)
-      - Tenta endpoint direto /sites/{host}:/sites/{path}
-      - Faz fallback por pesquisa se necessário
-    """
-    if not (SITE_HOSTNAME and SITE_PATH):
-        raise RuntimeError("SITE_HOSTNAME/SITE_PATH não definidos.")
+def get_site_id():
+    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
 
-    host = SITE_HOSTNAME.strip().lower()
-    path = SITE_PATH.strip().strip("/").lower()
-    if path.startswith("sites/"):
-        path = path[len("sites/"):]
-
-    h = {"Authorization": f"Bearer {token}"}
-
-    # 1) Tentativa principal
-    url_main = f"{GRAPH_BASE}/sites/{host}:/sites/{path}"
-    r = requests.get(url_main, headers=h)
-    if r.status_code == 200 and r.json().get("id"):
-        return r.json()["id"]
-
-    # 2) Fallback: pesquisa
-    url_search = f"{GRAPH_BASE}/sites?search={urllib.parse.quote(path)}"
-    rs = requests.get(url_search, headers=h)
-    if rs.status_code == 200 and rs.json().get("value"):
-        for s in rs.json()["value"]:
-            # Preferimos resultados do mesmo host
-            if host in s.get("webUrl", "").lower():
-                return s["id"]
-        # Caso nenhum do mesmo host, pega o primeiro
-        return rs.json()["value"][0]["id"]
-
-    # 3) Erro detalhado
-    raise RuntimeError(
-        "Não consegui obter o site_id.\n"
-        f"Tentei: {url_main} -> {r.status_code} {r.text}\n"
-        f"Pesquisa: {url_search} -> {rs.status_code} {rs.text}\n"
-        f"Verifica SITE_HOSTNAME='{SITE_HOSTNAME}', SITE_PATH='{SITE_PATH}'."
-    )
-
-def get_drive_id(token: str, site_id: str, drive_name="Documentos Partilhados") -> str:
-    h = {"Authorization": f"Bearer {token}"}
-    url = f"{GRAPH_BASE}/sites/{site_id}/drives"
-    r = requests.get(url, headers=h); r.raise_for_status()
-    for d in r.json().get("value", []):
-        if d.get("name") == drive_name:
-            return d["id"]
-    raise RuntimeError(f"Drive '{drive_name}' não encontrada para site_id={site_id}")
+def get_drive_id(site_id):
+    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
 
 def list_children_recursive(token: str, drive_id: str, drive_relative_folder: str) -> list[dict]:
     """
@@ -238,8 +193,8 @@ def main():
     print(f"[DEBUG] MAX_ROWS_READ={MAX_ROWS_READ}")
 
     token    = acquire_token()
-    site_id  = get_site_id(token)
-    drive_id = get_drive_id(token, site_id, drive_name="Documentos Partilhados")
+    site_id  = get_site_id()
+    drive_id = get_drive_id(site_id)
 
     total_files = 0
     ok_files    = 0
