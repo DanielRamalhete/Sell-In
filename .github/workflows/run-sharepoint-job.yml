@@ -11,7 +11,7 @@ env:
   CLIENT_ID: ${{ secrets.CLIENT_ID }}
   CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
   SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
-  SITE_PATH: ${{ secrets.SITE_PATH }}
+  SITE_PATH: ${{ secrets.SITE_PATH_W }}
   DRIVE_RELATIVE_FOLDERS: ${{ secrets.DRIVE_RELATIVE_FOLDERS }}
   # Para o consolidado:
   CONSOLIDATE_FILE_PATH: ${{ secrets.CONSOLIDATE_FILE_PATH }}
