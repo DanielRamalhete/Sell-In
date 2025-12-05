@@ -28,7 +28,7 @@ SOURCE_SHEET = "PowerBI Nao Mexer"
 COL_MARCAS    = "Marcas"
 VAL_COLS      = ["4Q2025", "1Q2026", "2Q2026", "3Q2026", "FY 2026"]
 PCT_COLS      = [f"{c}%" for c in VAL_COLS]
-EXTRA_COLS    = ["Valor B3", "Pasta"]
+EXTRA_COLS    = ["Farmácias", "GSI"]
 
 ALL_COLS      = [COL_MARCAS] + VAL_COLS + PCT_COLS + EXTRA_COLS  # 13 colunas
 COL_COUNT     = len(ALL_COLS)  # 13
