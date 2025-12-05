@@ -1,20 +1,29 @@
 
-name: Atualizar PowerBI Nao Mexer
+name: Executar transformação PowerBI Nao Mexer (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      maxRowsRead:
+        description: "Máximo de linhas a ler da 'Resumo Plano atual' (B6:G...)"
+        required: false
+        default: "2000"
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install requests pandas openpyxl
 
       - name: Run script
@@ -25,5 +34,7 @@ jobs:
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
           DRIVE_RELATIVE_FOLDERS: ${{ secrets.DRIVE_RELATIVE_FOLDERS }}
+          # Se quiseres passar o input para o script (opcional):
+          MAX_ROWS_READ: ${{ github.event.inputs.maxRowsRead }}
         run: |
           python criar_powerbi_nao_mexer_graph.py
