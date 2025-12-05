@@ -43,6 +43,7 @@ def get_site_id(token):
     h = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=h); r.raise_for_status()
     return r.json()["id"]
+    raise RuntimeError(f"Erro Aqui")
 
 def get_drive_id(token, site_id, drive_name="Documentos Partilhados"):
     url = f"{GRAPH_BASE}/sites/{site_id}/drives"
@@ -186,6 +187,7 @@ def build_output_from_values(values_rows):
 
 # ========= MAIN =========
 def main():
+    token = token_result["access_token"]
     base_headers = {"Authorization": f"Bearer {token}"}
     site_id  = get_site_id(token)
     drive_id = get_drive_id(token, site_id, drive_name="Documentos Partilhados")
