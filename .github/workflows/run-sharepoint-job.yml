@@ -42,7 +42,7 @@ jobs:
 
   consolidar_powerbi:
     runs-on: ubuntu-latest
-    needs: gerar_folhas_powerbi   # só corre se o anterior concluir com sucesso
+    # needs: gerar_folhas_powerbi   # só corre se o anterior concluir com sucesso
     steps:
       - name: Checkout
         uses: actions/checkout@v4
