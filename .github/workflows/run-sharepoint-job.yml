@@ -3,7 +3,7 @@ name: Planos Anuais - Geração e Consolidação
 
 on:
   schedule:
-    - cron: "0 11 * * *"   # todos os dias às 04:00 UTC
+    - cron: "03 4 * * *"   # todos os dias às 04:00 UTC
   workflow_dispatch:
 
 env:
