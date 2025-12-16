@@ -31,22 +31,48 @@ base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application
 
 # ---- Helpers base Graph ----
 def get_site_id():
-    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
+    url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}"
+    r = requests.get(url, headers=base_headers)
+    if not r.ok:
+        print("[DEBUG][get_site_id] STATUS:", r.status_code)
+        print("[DEBUG][get_site_id] TEXT:", r.text)
+        r.raise_for_status()
+    return r.json()["id"]
 
 def get_drive_id(site_id):
-    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
+    url = f"{GRAPH_BASE}/sites/{site_id}/drive"
+    r = requests.get(url, headers=base_headers)
+    if not r.ok:
+        print("[DEBUG][get_drive_id] STATUS:", r.status_code)
+        print("[DEBUG][get_drive_id] TEXT:", r.text)
+        r.raise_for_status()
+    return r.json()["id"]
 
 def get_item_id(drive_id, path):
-    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
+    url = f"{GRAPH_BASE}/drives/{drive_id}/root:{path}"
+    r = requests.get(url, headers=base_headers)
+    if not r.ok:
+        print("[DEBUG][get_item_id] STATUS:", r.status_code)
+        print("[DEBUG][get_item_id] TEXT:", r.text)
+        r.raise_for_status()
+    return r.json()["id"]
 
 def create_session(drive_id, item_id):
-    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
-                      headers=base_headers, data=json.dumps({"persistChanges": True}))
-    return r.json()["id"]
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession"
+    r = requests.post(url, headers=base_headers, data=json.dumps({"persistChanges": True}))
+    if not r.ok:
+        print("[DEBUG][create_session] STATUS:", r.status_code)
+        print("[DEBUG][create_session] TEXT:", r.text)
+        r.raise_for_status()
+    sid = r.json()["id"]
+    print("[DEBUG] Sessão criada:", sid)
+    return sid
 
 def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession"
+    r = requests.post(url, headers=h)
+    print("[DEBUG] Sessão fechada:", session_id, "| status:", r.status_code)
 
 # ---- DEBUG helpers ----
 def list_tables(drive_id, item_id, session_id):
@@ -89,7 +115,7 @@ def get_table_headers(drive_id, item_id, table_name, session_id):
     return headers
 
 def get_table_headers_safe(drive_id, item_id, table_name, session_id):
-    # 1) tentar "oficial"
+    # 1) tentativa oficial
     try:
         headers = get_table_headers(drive_id, item_id, table_name, session_id)
         if headers:
@@ -98,7 +124,7 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
     except requests.HTTPError:
         print("[DEBUG] headerRowRange falhou; a tentar fallback por /columns...")
 
-    # 2) columns
+    # 2) /columns -> names
     h = dict(base_headers); h["workbook-session-id"] = session_id
     url_cols = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/columns"
     rc = requests.get(url_cols, headers=h)
@@ -115,7 +141,7 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         try: print("[DEBUG] /columns JSON:", rc.json())
         except Exception: print("[DEBUG] /columns TEXT:", rc.text)
 
-    # 3) range
+    # 3) /range -> primeira linha
     url_rng = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
     rr = requests.get(url_rng, headers=h)
     if rr.ok:
@@ -132,7 +158,7 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         try: print("[DEBUG] /range JSON:", rr.json())
         except Exception: print("[DEBUG] /range TEXT:", rr.text)
 
-    rr.raise_for_status()  # força erro para ver detalhe
+    rr.raise_for_status()  # força erro p/ ver detalhe
 
 # ---- Outras helpers ----
 def list_table_rows(drive_id, item_id, table_name, session_id):
@@ -223,34 +249,35 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-# ---- DELETE de rows da Tabela via $batch (ItemAt) + fallback sequencial
-def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, row_indices,
-                                     max_batch_size=20, max_retries=3, fallback_sequential=True):
+# ---- DELETE via $batch (ItemAt) + recolha de falhas + fallback sequencial
+def delete_table_rows_by_index_batch(
+    drive_id, item_id, table_name, session_id, row_indices,
+    max_batch_size=20, max_retries=3, fallback_sequential=True
+):
     """
     Apaga rows do corpo da Tabela por índice (0-based) usando JSON $batch (até 20/lote),
     com endereçamento via função: rows/$/ItemAt(index={n}).
+    Recolhe as falhas e devolve {"deleted": X, "failed": [indices...]}.
 
-    Se o $batch falhar com 'ApiNotFound', testa DELETE unitário e,
-    se funcionar, ativa fallback sequencial (DELETE a DELETE).
-
-    Retorna o total de rows apagadas.
+    Se o $batch falhar com ApiNotFound/InvalidArgument, tenta fallback sequencial.
     """
     if not row_indices:
         print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
-        return 0
+        return {"deleted": 0, "failed": []}
 
     deleted_total = 0
+    failed_global = []
     batch_endpoint = f"{GRAPH_BASE}/$batch"
 
     def chunks(lst, size):
         for i in range(0, len(lst), size):
             yield lst[i:i+size]
 
-    # Apagar do MAIOR para o MENOR para não “mexer” nos seguintes
+    # Apagar do MAIOR para o MENOR para não deslocar os restantes
     row_indices = sorted(set(row_indices), reverse=True)
     print(f"[DEBUG][BATCH-DEL] Total de índices para apagar: {len(row_indices)}")
 
-    # --- helper para DELETE unitário (fora de batch) ---
+    # helper p/ DELETE unitário (fora de batch)
     def delete_single(idx):
         rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
         abs_url = f"{GRAPH_BASE}{rel_url}"
@@ -261,13 +288,11 @@ def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, 
             print("[DEBUG][DEL-ONE] STATUS:", r.status_code)
             try: print("[DEBUG][DEL-ONE] JSON:", r.json())
             except Exception: print("[DEBUG][DEL-ONE] TEXT:", r.text)
-        return r.ok
-
-    # --- primeiro: tentar $batch ---
-    last_batch_api_not_found = False
+            return False
+        return True
 
     for chunk in chunks(row_indices, max_batch_size):
-        # constrói payload do $batch com ItemAt
+        # monta lote
         requests_list = []
         for i, idx in enumerate(chunk, start=1):
             rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
@@ -299,43 +324,79 @@ def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, 
                 print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
                 try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
                 except Exception: print("[DEBUG][BATCH-DEL] TEXT:", r.text)
-                last_batch_api_not_found = True
+                # se o lote falhou “hard”, tenta sequencial em todos os índices do lote (se ativado)
+                if fallback_sequential:
+                    print("[DEBUG][BATCH-DEL] Falha no lote. A executar fallback sequencial para o lote.")
+                    for idx in chunk:
+                        if delete_single(idx):
+                            deleted_total += 1
+                        else:
+                            failed_global.append(idx)
                 break
 
+            # analisar sub-respostas
             resp = r.json()
             ok_ids = [e for e in resp.get("responses", []) if e.get("status") in (200, 204)]
             deleted_total += len(ok_ids)
 
-            api_not_found_count = 0
             for e in resp.get("responses", []):
                 status = e.get("status")
                 if status not in (200, 204):
-                    body = e.get("body")
+                    body = e.get("body") or {}
                     print("[DEBUG][BATCH-DEL] Falhou id", e.get("id"),
-                          "| status:", status,
-                          "| body:", body)
+                          "| status:", status, "| body:", body)
+                    # mapeia id do lote -> o índice correspondente
                     try:
-                        code = (body or {}).get("error", {}).get("code")
-                        if code and code.lower() == "apinotfound":
-                            api_not_found_count += 1
+                        failed_idx = chunk[int(e.get("id")) - 1]
+                        failed_global.append(failed_idx)
                     except Exception:
                         pass
+            break  # fim do while deste lote
 
-            if api_not_found_count > 0:
-                last_batch_api_not_found = True
-            break  # terminou o lote
+    print(f"[DEBUG][BATCH-DEL] Total rows apagadas (batch+seq parcial): {deleted_total}")
+    return {"deleted": deleted_total, "failed": sorted(set(failed_global), reverse=True)}
 
-        if last_batch_api_not_found and fallback_sequential:
-            print("[DEBUG][BATCH-DEL] ApiNotFound no $batch. A executar fallback sequencial (DELETE unitário).")
-            for idx in chunk:
-                if delete_single(idx):
-                    deleted_total += 1
-                else:
-                    print(f"[DEBUG][DEL-ONE] Falhou idx={idx} (ver logs acima).")
-            last_batch_api_not_found = False
+# ---- Helpers para “sweep” final (recalcula índices e apaga 1 a 1)
+def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end):
+    """Volta a ler a tabela e devolve os índices (0-based) das rows do mês atual."""
+    rows = list_table_rows(drive_id, item_id, table_name, session_id)
+    indices = []
+    for i, r in enumerate(rows):
+        vals = (r.get("values", [[]])[0] or [])
+        if len(vals) > date_idx:
+            d = excel_value_to_date(vals[date_idx])
+            if d and month_start <= d.date() <= month_end:
+                indices.append(i)
+    return indices
 
-    print(f"[DEBUG][BATCH-DEL] Total rows apagadas: {deleted_total}")
-    return deleted_total
+def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, max_iters=5000):
+    """
+    Sweep final: enquanto existirem linhas do mês atual, apaga 1 a 1 (DELETE unitário).
+    Útil para remover pendentes que falharam no $batch por drift de índice.
+    """
+    deleted = 0
+    iters = 0
+    while iters < max_iters:
+        iters += 1
+        indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end)
+        if not indices:
+            break
+        # apaga a de MAIOR índice (mais seguro)
+        idx = max(indices)
+        rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
+        abs_url = f"{GRAPH_BASE}{rel_url}"
+        h = dict(base_headers); h["workbook-session-id"] = session_id
+        print(f"[DEBUG][SWEEP] DELETE {abs_url} (restantes: {len(indices)})")
+        r = requests.delete(abs_url, headers=h)
+        if not r.ok:
+            print("[DEBUG][SWEEP] STATUS:", r.status_code)
+            try: print("[DEBUG][SWEEP] JSON:", r.json())
+            except Exception: print("[DEBUG][SWEEP] TEXT:", r.text)
+            # se falhar, tentamos a próxima iteração
+            continue
+        deleted += 1
+    print(f"[DEBUG][SWEEP] Removidas no sweep: {deleted}")
+    return deleted
 
 # ---- Fluxo principal ----
 site_id  = get_site_id()
@@ -393,19 +454,26 @@ try:
         print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
 
-        # --- Apagar fisicamente as rows do mês atual (TableRow DELETE via $batch) ---
+        # --- Apagar via $batch + seq parcial (recolhe falhas) ---
         if indices_to_delete:
-            deleted = delete_table_rows_by_index_batch(
-                drive_id, dst_id, DST_TABLE, dst_sid, indices_to_delete
+            res = delete_table_rows_by_index_batch(
+                drive_id, dst_id, DST_TABLE, dst_sid, indices_to_delete,
+                max_batch_size=20, max_retries=3, fallback_sequential=True
             )
-            print(f"[OK] Removi {deleted} linhas do mês atual no destino (eliminação via TableRow DELETE).")
+            print(f"[OK] Removi {res['deleted']} linhas via $batch/seq parcial. Falharam {len(res['failed'])} no batch.")
+
+            # --- Sweep final: recalcula índices e apaga remanescentes do mês ---
+            sweep_deleted = cleanup_month_rows_sequential(
+                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end
+            )
+            print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
         else:
             print("[DEBUG] Nenhuma linha do mês encontrada para apagar no destino.")
 
         # --- Inserir novas linhas do mês atual ---
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
-        print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
+        print(f"[OK] Inseridas {len(to_import)} linhas        print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
     close_session(drive_id, src_id, src_sid)
-    close_session(drive_id, dst_id, dst_sid)
+
