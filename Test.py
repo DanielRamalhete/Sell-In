@@ -141,18 +141,14 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-def delete_row_blocks(drive_id, item_id, session_id, worksheet_id, sheet_name, start_col, end_col, header_row, indices_0based):
-    """
-    Apaga, em blocos contíguos, as rows do corpo da Tabela cujos índices (0-based) são fornecidos.
-    Mapeia índices de tabela → números de linha na folha e faz range/delete (shift Up).
-    """
-    # Mapeia índice de tabela (0-based) para número de linha da folha:
-    # header_row = linha onde está o cabeçalho; 1ª linha de dados = header_row + 1
+
+def delete_row_blocks(drive_id, item_id, session_id, worksheet_id, sheet_name,
+                      start_col, end_col, header_row, indices_0based):
     ws_rows = sorted({ header_row + 1 + i for i in indices_0based })
     if not ws_rows:
         return 0
 
-    # Agrupa linhas contíguas
+    # agrupar linhas contíguas
     blocks = []
     s = prev = ws_rows[0]
     for r in ws_rows[1:]:
@@ -166,8 +162,12 @@ def delete_row_blocks(drive_id, item_id, session_id, worksheet_id, sheet_name, s
     h = dict(base_headers); h["workbook-session-id"] = session_id
     total_deleted = 0
     for ini, fim in blocks:
-        addr = f"'{sheet_name}'!{start_col}{ini}:{end_col}{fim}"
-        url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{worksheet_id}/range(address='{addr}')/delete"
+        # ✅ address relativo à worksheet (NÃO incluir 'sheet'!)
+        addr = f"{start_col}{ini}:{end_col}{fim}"   # ex.: "A2:U10"
+        url = (
+            f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
+            f"/workbook/worksheets/{worksheet_id}/range(address='{addr}')/delete"
+               )
         r = requests.post(url, headers=h, data=json.dumps({"shift": "Up"}))
         r.raise_for_status()
         total_deleted += (fim - ini + 1)
