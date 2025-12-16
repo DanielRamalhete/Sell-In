@@ -1,3 +1,4 @@
+
 import os, json, requests, msal
 from datetime import datetime, timedelta
 
@@ -222,13 +223,17 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-# ---- DELETE de rows da Tabela via $batch (com sessão e debug)
+# ---- DELETE de rows da Tabela via $batch (ItemAt) + fallback sequencial
 def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, row_indices,
-                                     max_batch_size=20, max_retries=3):
+                                     max_batch_size=20, max_retries=3, fallback_sequential=True):
     """
-    Apaga rows do corpo da Tabela por índice (0-based), usando JSON $batch (20 por lote).
-    Apaga em ordem DESC para não deslocar os índices seguintes.
-    Implementa retry simples em caso de 429 (throttling) respeitando Retry-After.
+    Apaga rows do corpo da Tabela por índice (0-based) usando JSON $batch (até 20/lote),
+    com endereçamento via função: rows/$/ItemAt(index={n}).
+
+    Se o $batch falhar com 'ApiNotFound', testa DELETE unitário e,
+    se funcionar, ativa fallback sequencial (DELETE a DELETE).
+
+    Retorna o total de rows apagadas.
     """
     if not row_indices:
         print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
@@ -245,20 +250,36 @@ def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, 
     row_indices = sorted(set(row_indices), reverse=True)
     print(f"[DEBUG][BATCH-DEL] Total de índices para apagar: {len(row_indices)}")
 
+    # --- helper para DELETE unitário (fora de batch) ---
+    def delete_single(idx):
+        rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
+        abs_url = f"{GRAPH_BASE}{rel_url}"
+        h = dict(base_headers); h["workbook-session-id"] = session_id
+        print(f"[DEBUG][DEL-ONE] DELETE {abs_url}")
+        r = requests.delete(abs_url, headers=h)
+        if not r.ok:
+            print("[DEBUG][DEL-ONE] STATUS:", r.status_code)
+            try: print("[DEBUG][DEL-ONE] JSON:", r.json())
+            except Exception: print("[DEBUG][DEL-ONE] TEXT:", r.text)
+        return r.ok
+
+    # --- primeiro: tentar $batch ---
+    last_batch_api_not_found = False
+
     for chunk in chunks(row_indices, max_batch_size):
-        # constrói payload do $batch
+        # constrói payload do $batch com ItemAt
         requests_list = []
         for i, idx in enumerate(chunk, start=1):
-            # Endpoint oficial: DELETE linha da Tabela (sem header)
-            # https://learn.microsoft.com/graph/api/tablerow-delete
-            rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}"
+            rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
             requests_list.append({
                 "id": str(i),
                 "method": "DELETE",
                 "url": rel_url,
-                # passar a sessão em CADA sub-request
                 "headers": { "workbook-session-id": session_id }
             })
+
+        print("[DEBUG][BATCH-DEL] URLs no lote:",
+              [req["url"] for req in requests_list])
 
         payload = { "requests": requests_list }
 
@@ -267,29 +288,51 @@ def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, 
             attempt += 1
             print(f"[DEBUG][BATCH-DEL] POST {batch_endpoint} (lote {len(chunk)}, tentativa {attempt})")
             r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
+
             if r.status_code == 429 and attempt <= max_retries:
                 wait = int(r.headers.get("Retry-After", "5"))
                 print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {wait}s…")
                 import time; time.sleep(wait)
                 continue
+
             if not r.ok:
                 print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
                 try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
                 except Exception: print("[DEBUG][BATCH-DEL] TEXT:", r.text)
-                r.raise_for_status()
+                last_batch_api_not_found = True
+                break
 
-            # contar deletes bem-sucedidos
             resp = r.json()
             ok_ids = [e for e in resp.get("responses", []) if e.get("status") in (200, 204)]
             deleted_total += len(ok_ids)
 
-            # log de erros por linha, se houver
+            api_not_found_count = 0
             for e in resp.get("responses", []):
-                if e.get("status") not in (200, 204):
+                status = e.get("status")
+                if status not in (200, 204):
+                    body = e.get("body")
                     print("[DEBUG][BATCH-DEL] Falhou id", e.get("id"),
-                          "| status:", e.get("status"),
-                          "| body:", e.get("body"))
-            break  # sai do retry loop deste chunk
+                          "| status:", status,
+                          "| body:", body)
+                    try:
+                        code = (body or {}).get("error", {}).get("code")
+                        if code and code.lower() == "apinotfound":
+                            api_not_found_count += 1
+                    except Exception:
+                        pass
+
+            if api_not_found_count > 0:
+                last_batch_api_not_found = True
+            break  # terminou o lote
+
+        if last_batch_api_not_found and fallback_sequential:
+            print("[DEBUG][BATCH-DEL] ApiNotFound no $batch. A executar fallback sequencial (DELETE unitário).")
+            for idx in chunk:
+                if delete_single(idx):
+                    deleted_total += 1
+                else:
+                    print(f"[DEBUG][DEL-ONE] Falhou idx={idx} (ver logs acima).")
+            last_batch_api_not_found = False
 
     print(f"[DEBUG][BATCH-DEL] Total rows apagadas: {deleted_total}")
     return deleted_total
@@ -346,6 +389,7 @@ try:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
                     indices_to_delete.append(i)
+
         print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
 
@@ -363,4 +407,5 @@ try:
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
-       close_session(drive_id, src_id, src_sid)
+    close_session(drive_id, src_id, src_sid)
+    close_session(drive_id, dst_id, dst_sid)
