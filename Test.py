@@ -226,7 +226,7 @@ def parse_range_address(address: str):
 # ---- DELETE via $batch (ItemAt) + recolha de falhas + fallback sequencial
 def delete_table_rows_by_index_batch(
     drive_id, item_id, table_name, session_id, row_indices,
-    max_batch_size=20, max_retries=3, fallback_sequential=True
+    max_batch_size=5, max_retries=3, fallback_sequential=True
 ):
     """
     Apaga rows do corpo da Tabela por índice (0-based) usando JSON $batch (até 20/lote),
