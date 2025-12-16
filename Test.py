@@ -1,4 +1,3 @@
-
 import os, json, requests, msal
 from datetime import datetime, timedelta
 
@@ -235,7 +234,7 @@ def month_bounds(d: datetime):
     return first, last
 
 def parse_range_address(address: str):
-    """Ex.: 'Historico!A1:AD100' → sheet, start_col, start_row, end_col, end_row"""
+    """Ex.: 'LstPrd!A1:U535' → sheet, start_col, start_row, end_col, end_row"""
     sheet, cells = address.split("!")
     start, end = cells.split(":")
     import re
@@ -249,48 +248,77 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-# ---- DELETE por blocos contíguos (address relativo à worksheet)
-def delete_row_blocks(drive_id, item_id, session_id, worksheet_id, sheet_name,
-                      start_col, end_col, header_row, indices_0based):
+# ---- DELETE de rows da Tabela via $batch (com sessão e debug)
+def delete_table_rows_by_index_batch(drive_id, item_id, table_name, session_id, row_indices,
+                                     max_batch_size=20, max_retries=3):
     """
-    Mapeia índices (0-based) do corpo da tabela p/ números de linha da folha
-    e apaga blocos contíguos com range/delete (shift Up).
+    Apaga rows do corpo da Tabela por índice (0-based), usando JSON $batch (20 por lote).
+    Apaga em ordem DESC para não deslocar os índices seguintes.
+    Implementa retry simples em caso de 429 (throttling) respeitando Retry-After.
     """
-    ws_rows = sorted({ header_row + 1 + i for i in indices_0based })
-    if not ws_rows:
-        print("[DEBUG] Nenhuma linha a apagar.")
+    if not row_indices:
+        print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
         return 0
 
-    # Agrupar linhas contíguas
-    blocks = []
-    s = prev = ws_rows[0]
-    for r in ws_rows[1:]:
-        if r == prev + 1:
-            prev = r
-        else:
-            blocks.append((s, prev))
-            s = prev = r
-    blocks.append((s, prev))
+    deleted_total = 0
+    batch_endpoint = f"{GRAPH_BASE}/$batch"
 
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    total_deleted = 0
-    for ini, fim in blocks:
-        # address relativo à worksheet (NÃO incluir 'Sheet'!)
-        addr = f"{start_col}{ini}:{end_col}{fim}"   # ex.: "A2:U10"
-        url = (f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
-               f"/workbook/worksheets/{worksheet_id}/range(address='{addr}')/delete")
-        body = {"shift": "Up"}
-        print(f"[DEBUG][DELETE] {url} body={body}")
-        r = requests.post(url, headers=h, data=json.dumps(body))
-        if not r.ok:
-            print("[DEBUG][DELETE] STATUS:", r.status_code)
-            try: print("[DEBUG][DELETE] JSON:", r.json())
-            except Exception: print("[DEBUG][DELETE] TEXT:", r.text)
-            r.raise_for_status()
-        total_deleted += (fim - ini + 1)
+    def chunks(lst, size):
+        for i in range(0, len(lst), size):
+            yield lst[i:i+size]
 
-    print(f"[DEBUG] Total de linhas apagadas: {total_deleted}")
-    return total_deleted
+    # Apagar do MAIOR para o MENOR para não “mexer” nos seguintes
+    row_indices = sorted(set(row_indices), reverse=True)
+    print(f"[DEBUG][BATCH-DEL] Total de índices para apagar: {len(row_indices)}")
+
+    for chunk in chunks(row_indices, max_batch_size):
+        # constrói payload do $batch
+        requests_list = []
+        for i, idx in enumerate(chunk, start=1):
+            # Endpoint oficial: DELETE linha da Tabela (sem header)
+            # https://learn.microsoft.com/graph/api/tablerow-delete
+            rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}"
+            requests_list.append({
+                "id": str(i),
+                "method": "DELETE",
+                "url": rel_url,
+                # passar a sessão em CADA sub-request
+                "headers": { "workbook-session-id": session_id }
+            })
+
+        payload = { "requests": requests_list }
+
+        attempt = 0
+        while True:
+            attempt += 1
+            print(f"[DEBUG][BATCH-DEL] POST {batch_endpoint} (lote {len(chunk)}, tentativa {attempt})")
+            r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
+            if r.status_code == 429 and attempt <= max_retries:
+                wait = int(r.headers.get("Retry-After", "5"))
+                print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {wait}s…")
+                import time; time.sleep(wait)
+                continue
+            if not r.ok:
+                print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
+                try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
+                except Exception: print("[DEBUG][BATCH-DEL] TEXT:", r.text)
+                r.raise_for_status()
+
+            # contar deletes bem-sucedidos
+            resp = r.json()
+            ok_ids = [e for e in resp.get("responses", []) if e.get("status") in (200, 204)]
+            deleted_total += len(ok_ids)
+
+            # log de erros por linha, se houver
+            for e in resp.get("responses", []):
+                if e.get("status") not in (200, 204):
+                    print("[DEBUG][BATCH-DEL] Falhou id", e.get("id"),
+                          "| status:", e.get("status"),
+                          "| body:", e.get("body"))
+            break  # sai do retry loop deste chunk
+
+    print(f"[DEBUG][BATCH-DEL] Total rows apagadas: {deleted_total}")
+    return deleted_total
 
 # ---- Fluxo principal ----
 site_id  = get_site_id()
@@ -344,25 +372,15 @@ try:
                 d = excel_value_to_date(vals[date_idx_dst])
                 if d and month_start <= d.date() <= month_end:
                     indices_to_delete.append(i)
-        print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete}")
+        print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
+        print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
 
-        # --- Apagar fisicamente as rows do mês atual (range/delete) ---
+        # --- Apagar fisicamente as rows do mês atual (TableRow DELETE via $batch) ---
         if indices_to_delete:
-            table_addr = get_table_range(drive_id, dst_id, DST_TABLE, dst_sid)  # ex.: "Historico!A1:AD100"
-            meta = parse_range_address(table_addr)
-            sheet_name   = meta["sheet"]
-            header_row   = meta["start_row"]
-            start_col    = meta["start_col"]
-            end_col      = meta["end_col"]
-            worksheet_id = get_worksheet_id(drive_id, dst_id, dst_sid, sheet_name)
-            print(f"[DEBUG] worksheet_id={worksheet_id} sheet_name='{sheet_name}' table_range={table_addr}")
-
-            deleted = delete_row_blocks(
-                drive_id, dst_id, dst_sid, worksheet_id,
-                sheet_name, start_col, end_col, header_row,
-                indices_to_delete
+            deleted = delete_table_rows_by_index_batch(
+                drive_id, dst_id, DST_TABLE, dst_sid, indices_to_delete
             )
-            print(f"[OK] Removi {deleted} linhas do mês atual no destino (eliminação física).")
+            print(f"[OK] Removi {deleted} linhas do mês atual no destino (eliminação via TableRow DELETE).")
         else:
             print("[DEBUG] Nenhuma linha do mês encontrada para apagar no destino.")
 
@@ -371,5 +389,4 @@ try:
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
-    close_session(drive_id, src_id, src_sid)
-    close_session(drive_id, dst_id, dst_sid)
+       close_session(drive_id, src_id, src_sid)
