@@ -446,7 +446,7 @@ try:
 
         # --- Inserir novas linhas do mês atual ---
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
-        print(f"[OK] Inseridas {len(to_import)} linhas        print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
+        print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
     close_session(drive_id, src_id, src_sid)
