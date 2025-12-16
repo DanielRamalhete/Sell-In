@@ -30,48 +30,22 @@ base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application
 
 # ---- Helpers base Graph ----
 def get_site_id():
-    url = f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}"
-    r = requests.get(url, headers=base_headers)
-    if not r.ok:
-        print("[DEBUG][get_site_id] STATUS:", r.status_code)
-        print("[DEBUG][get_site_id] TEXT:", r.text)
-        r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
 
 def get_drive_id(site_id):
-    url = f"{GRAPH_BASE}/sites/{site_id}/drive"
-    r = requests.get(url, headers=base_headers)
-    if not r.ok:
-        print("[DEBUG][get_drive_id] STATUS:", r.status_code)
-        print("[DEBUG][get_drive_id] TEXT:", r.text)
-        r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
 
 def get_item_id(drive_id, path):
-    url = f"{GRAPH_BASE}/drives/{drive_id}/root:{path}"
-    r = requests.get(url, headers=base_headers)
-    if not r.ok:
-        print("[DEBUG][get_item_id] STATUS:", r.status_code)
-        print("[DEBUG][get_item_id] TEXT:", r.text)
-        r.raise_for_status()
-    return r.json()["id"]
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
 
 def create_session(drive_id, item_id):
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession"
-    r = requests.post(url, headers=base_headers, data=json.dumps({"persistChanges": True}))
-    if not r.ok:
-        print("[DEBUG][create_session] STATUS:", r.status_code)
-        print("[DEBUG][create_session] TEXT:", r.text)
-        r.raise_for_status()
-    sid = r.json()["id"]
-    print("[DEBUG] Sessão criada:", sid)
-    return sid
+    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
+                      headers=base_headers, data=json.dumps({"persistChanges": True}))
+    return r.json()["id"]
 
 def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession"
-    r = requests.post(url, headers=h)
-    print("[DEBUG] Sessão fechada:", session_id, "| status:", r.status_code)
+    requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
 
 # ---- DEBUG helpers ----
 def list_tables(drive_id, item_id, session_id):
