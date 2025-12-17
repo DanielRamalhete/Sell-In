@@ -141,7 +141,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
     Devolve dicionários tal como o endpoint: cada item tem 'index' (0-based no corpo da Tabela) e 'values'.
     """
     if top is None:
-        top = int(os.getenv("GRAPH_ROWS_TOP") or "5000")
+        top = DEFAULT_TOP
 
     h = dict(base_headers); h["workbook-session-id"] = session_id
     base_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
@@ -161,7 +161,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
             r.raise_for_status()
         batch = r.json().get("value", [])
         if not batch:
-            print(f"[DEBUG][list_table_rows_paged] Fim da paginação. total={total}, páginas={page-1}")
+            print(f"[DEBUG][list_table_rows_paged] Fim da paginação. total={total}, páginas={page-1}, top_final={top}")
             break
 
         print(f"[DEBUG][list_table_rows_paged] page={page} top={top} skip={skip} count={len(batch)}")
@@ -226,7 +226,6 @@ def reorder_values_by_headers(src_headers, dst_headers, row_values):
     return [row_values[src_pos.get(name)] if src_pos.get(name) is not None else None for name in dst_headers]
 
 def month_bounds(d: datetime):
-    """Devolve (first_day, last_day) do mês de d (objetos date)."""
     first = datetime(d.year, d.month, 1).date()
     if d.month == 12:
         next_first = datetime(d.year + 1, 1, 1).date()
@@ -236,7 +235,6 @@ def month_bounds(d: datetime):
     return first, last
 
 def parse_range_address(address: str):
-    """Ex.: 'LstPrd!A1:U535' → sheet, start_col, start_row, end_col, end_row (mantido caso precises)"""
     sheet, cells = address.split("!")
     start, end = cells.split(":")
     import re
@@ -250,17 +248,15 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-# ---- DELETE via $batch (ItemAt) + recolha de falhas + fallback sequencial
+# ---- DELETE via $batch (ItemAt) + recolha de falhas
 def delete_table_rows_by_index_batch(
     drive_id, item_id, table_name, session_id, row_indices,
-    max_batch_size=20, max_retries=3, fallback_sequential=True
+    max_batch_size=20, max_retries=3, fallback_sequential=False
 ):
     """
     Apaga rows do corpo da Tabela por índice (0-based) usando JSON $batch (até 20/lote),
     com endereçamento via função: rows/$/ItemAt(index={n}).
     Recolhe as falhas e devolve {"deleted": X, "failed": [indices...]}.
-
-    Se o $batch falhar (InvalidArgument/ApiNotFound, etc.), tenta fallback sequencial.
     """
     if not row_indices:
         print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
@@ -278,7 +274,7 @@ def delete_table_rows_by_index_batch(
     row_indices = sorted(set(row_indices), reverse=True)
     print(f"[DEBUG][BATCH-DEL] Total de índices para apagar: {len(row_indices)}")
 
-    # helper p/ DELETE unitário (fora de batch)
+    # helper p/ DELETE unitário (opcional)
     def delete_single(idx):
         rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
         abs_url = f"{GRAPH_BASE}{rel_url}"
@@ -304,8 +300,7 @@ def delete_table_rows_by_index_batch(
                 "headers": { "workbook-session-id": session_id }
             })
 
-        print("[DEBUG][BATCH-DEL] URLs no lote:",
-              [req["url"] for req in requests_list])
+        print("[DEBUG][BATCH-DEL] URLs no lote:", [req["url"] for req in requests_list])
 
         payload = { "requests": requests_list }
 
@@ -325,7 +320,7 @@ def delete_table_rows_by_index_batch(
                 print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
                 try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
                 except Exception: print("[DEBUG][BATCH-DEL] TEXT:", r.text)
-                # se o lote falhou “hard”, tenta sequencial em todos os índices do lote (se ativado)
+                # fallback rápido (opcional)
                 if fallback_sequential:
                     print("[DEBUG][BATCH-DEL] Falha no lote. A executar fallback sequencial para o lote.")
                     for idx in chunk:
@@ -354,12 +349,14 @@ def delete_table_rows_by_index_batch(
                         pass
             break  # fim do while deste lote
 
-    print(f"[DEBUG][BATCH-DEL] Total rows apagadas (batch+seq parcial): {deleted_total}")
+    print(f"[DEBUG][BATCH-DEL] Total rows apagadas (batch): {deleted_total}")
     return {"deleted": deleted_total, "failed": sorted(set(failed_global), reverse=True)}
 
-# ---- Helpers para “sweep” final (recalcula índices e apaga 1 a 1)
+# ---- Helpers para “sweep” (recalcula índices e apaga em GRUPOS) ----
 def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, top=None):
     """Volta a ler a Tabela em páginas e devolve os índices (0-based) das rows do mês atual."""
+    if top is None:
+        top = DEFAULT_TOP
     indices = []
     for r in list_table_rows_paged(drive_id, item_id, table_name, session_id, top=top):
         idx = r.get("index")
@@ -371,34 +368,54 @@ def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, 
             indices.append(int(idx))
     return indices
 
-def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, max_iters=5000, top=None):
+def cleanup_month_rows_in_groups(
+    drive_id, item_id, table_name, session_id,
+    date_idx, month_start, month_end,
+    group_size=DEFAULT_SWEEP_GROUP, top=DEFAULT_TOP, max_iters=10000
+):
     """
-    Sweep final: enquanto existirem linhas do mês atual, apaga 1 a 1 (DELETE unitário).
-    Útil para remover pendentes que falharam no $batch por drift de índice.
+    Varrer as linhas do mês atual em GRUPOS.
+    Em cada iteração:
+      1) lê índices restantes (paginado),
+      2) escolhe até 'group_size' MAIORES índices,
+      3) apaga todos via $batch (a função já subdivide em lotes de 20).
+    Repete até não restarem linhas do mês.
     """
-    deleted = 0
+    total_deleted = 0
     iters = 0
+
     while iters < max_iters:
         iters += 1
+        # 1) Recalcular índices restantes (apenas 1 leitura por iteração)
         indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, top=top)
         if not indices:
+            print(f"[DEBUG][SWEEP-GROUP] Nada restante. iters={iters-1} total_deleted={total_deleted}")
             break
-        # apaga a de MAIOR índice (mais seguro)
-        idx = max(indices)
-        rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
-        abs_url = f"{GRAPH_BASE}{rel_url}"
-        h = dict(base_headers); h["workbook-session-id"] = session_id
-        print(f"[DEBUG][SWEEP] DELETE {abs_url} (restantes: {len(indices)})")
-        r = requests.delete(abs_url, headers=h)
-        if not r.ok:
-            print("[DEBUG][SWEEP] STATUS:", r.status_code)
-            try: print("[DEBUG][SWEEP] JSON:", r.json())
-            except Exception: print("[DEBUG][SWEEP] TEXT:", r.text)
-            # tenta novamente noutra iteração
-            continue
-        deleted += 1
-    print(f"[DEBUG][SWEEP] Removidas no sweep: {deleted}")
-    return deleted
+
+        # 2) Selecionar até 'group_size' maiores índices (mais estável)
+        indices = sorted(set(indices), reverse=True)
+        group = indices[:group_size]
+        print(f"[DEBUG][SWEEP-GROUP] Iter {iters}: apagar {len(group)} de {len(indices)} restantes (maiores índices).")
+
+        # 3) Apagar o grupo via $batch (quebra em lotes de 20)
+        res = delete_table_rows_by_index_batch(
+            drive_id, item_id, table_name, session_id, group,
+            max_batch_size=20, max_retries=3, fallback_sequential=False
+        )
+        total_deleted += res["deleted"]
+
+        # Retry imediato só das falhas deste grupo (sem reler índices)
+        failed = res["failed"]
+        if failed:
+            print(f"[DEBUG][SWEEP-GROUP] {len(failed)} falharam no grupo. A tentar retry imediato só dessas.")
+            res2 = delete_table_rows_by_index_batch(
+                drive_id, item_id, table_name, session_id, failed,
+                max_batch_size=20, max_retries=3, fallback_sequential=False
+            )
+            total_deleted += res2["deleted"]
+
+    print(f"[DEBUG][SWEEP-GROUP] Total removido no sweep em grupos: {total_deleted}")
+    return total_deleted
 
 # ---- Fluxo principal ----
 site_id  = get_site_id()
@@ -432,7 +449,7 @@ try:
 
     # --- Origens: filtrar mês atual e reordenar p/ o destino (paginação) ---
     to_import = []
-    for r in list_table_rows_paged(drive_id, src_id, SRC_TABLE, src_sid):
+    for r in list_table_rows_paged(drive_id, src_id, SRC_TABLE, src_sid, top=5000):
         vals = (r.get("values", [[]])[0] or [])
         if len(vals) <= date_idx_src:
             continue
@@ -446,7 +463,7 @@ try:
     else:
         # --- Destino: índices a remover (mês atual) em páginas ---
         indices_to_delete = []
-        for r in list_table_rows_paged(drive_id, dst_id, DST_TABLE, dst_sid):
+        for r in list_table_rows_paged(drive_id, dst_id, DST_TABLE, dst_sid, top=5000):
             idx = r.get("index")
             vals = (r.get("values", [[]])[0] or [])
             if idx is None or len(vals) <= date_idx_dst:
@@ -458,19 +475,21 @@ try:
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
         print(f"[DEBUG] Amostra índices: {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
 
-        # --- Apagar via $batch + seq parcial (recolhe falhas) ---
+        # --- Apagar via $batch ---
         if indices_to_delete:
             res = delete_table_rows_by_index_batch(
                 drive_id, dst_id, DST_TABLE, dst_sid, indices_to_delete,
-                max_batch_size=20, max_retries=3, fallback_sequential=True
+                max_batch_size=20, max_retries=3, fallback_sequential=False
             )
-            print(f"[OK] Removi {res['deleted']} linhas via $batch/seq parcial. Falharam {len(res['failed'])} no batch.")
+            print(f"[OK] Removi {res['deleted']} linhas via $batch. Falharam {len(res['failed'])} no batch.")
 
-            # --- Sweep final: recalcula índices e apaga remanescentes do mês ---
-            sweep_deleted = cleanup_month_rows_sequential(
-                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end, top=int(os.getenv("GRAPH_ROWS_TOP") or "5000")
+            # --- Sweep final em GRUPOS para remanescentes do mês (rápido e eficiente) ---
+            sweep_deleted = cleanup_month_rows_in_groups(
+                drive_id, dst_id, DST_TABLE, dst_sid,
+                date_idx_dst, month_start, month_end,
+                group_size=500, top=5000
             )
-            print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
+            print(f"[OK] Sweep em grupos removeu {sweep_deleted} linhas remanescentes do mês.")
         else:
             print("[DEBUG] Nenhuma linha do mês encontrada para apagar no destino.")
 
@@ -479,5 +498,5 @@ try:
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
-       close_session(drive_id, src_id, src_sid)
-       close_session(drive_id, dst_id, dst_sid)
+    close_session(drive_id, src_id, src_sid)
+    close_session(drive_id, dst_id, dst_sid)
