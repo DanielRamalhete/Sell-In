@@ -141,7 +141,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
     Devolve dicionários tal como o endpoint: cada item tem 'index' (0-based no corpo da Tabela) e 'values'.
     """
     if top is None:
-        top = DEFAULT_TOP
+        top = 5000
 
     h = dict(base_headers); h["workbook-session-id"] = session_id
     base_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
@@ -356,7 +356,7 @@ def delete_table_rows_by_index_batch(
 def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, top=None):
     """Volta a ler a Tabela em páginas e devolve os índices (0-based) das rows do mês atual."""
     if top is None:
-        top = DEFAULT_TOP
+        top = 5000
     indices = []
     for r in list_table_rows_paged(drive_id, item_id, table_name, session_id, top=top):
         idx = r.get("index")
@@ -371,7 +371,7 @@ def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, 
 def cleanup_month_rows_in_groups(
     drive_id, item_id, table_name, session_id,
     date_idx, month_start, month_end,
-    group_size=DEFAULT_SWEEP_GROUP, top=DEFAULT_TOP, max_iters=10000
+    group_size=500, top=5000, max_iters=10000
 ):
     """
     Varrer as linhas do mês atual em GRUPOS.
