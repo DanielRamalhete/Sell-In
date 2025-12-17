@@ -468,7 +468,7 @@ try:
 
             # --- Sweep final: recalcula índices e apaga remanescentes do mês ---
             sweep_deleted = cleanup_month_rows_sequential(
-                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end, top=int(os.getenv("GRAPH_ROWS_TOP") or "500")
+                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end, top=int(os.getenv("GRAPH_ROWS_TOP") or "5000")
             )
             print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
         else:
