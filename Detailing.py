@@ -134,18 +134,45 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
 
     rr.raise_for_status()  # força erro p/ ver detalhe
 
-# ---- Outras helpers ----
-def list_table_rows(drive_id, item_id, table_name, session_id):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
-    r = requests.get(url, headers=h)
-    if not r.ok:
-        print("[DEBUG][list_table_rows] STATUS:", r.status_code)
-        try: print("[DEBUG][list_table_rows] JSON:", r.json())
-        except Exception: print("[DEBUG][list_table_rows] TEXT:", r.text)
-        r.raise_for_status()
-    return r.json().get("value", [])
+# ---- Listar rows com paginação ($top/$skip) ----
+def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, max_pages=100000):
+    """
+    Itera pelas rows da Tabela em páginas usando $top/$skip para evitar 'ResponsePayloadSizeLimitExceeded'.
+    Devolve dicionários tal como o endpoint: cada item tem 'index' (0-based no corpo da Tabela) e 'values'.
+    """
+    if top is None:
+        top = int(os.getenv("GRAPH_ROWS_TOP") or "500")
 
+    h = dict(base_headers); h["workbook-session-id"] = session_id
+    base_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
+    skip = 0
+    page = 0
+    total = 0
+
+    while page < max_pages:
+        page += 1
+        url = f"{base_url}?$top={top}&$skip={skip}"
+        r = requests.get(url, headers=h)
+        if not r.ok:
+            print("[DEBUG][list_table_rows_paged] URL:", url)
+            print("[DEBUG][list_table_rows_paged] STATUS:", r.status_code)
+            try: print("[DEBUG][list_table_rows_paged] JSON:", r.json())
+            except Exception: print("[DEBUG][list_table_rows_paged] TEXT:", r.text)
+            r.raise_for_status()
+        batch = r.json().get("value", [])
+        if not batch:
+            print(f"[DEBUG][list_table_rows_paged] Fim da paginação. total={total}, páginas={page-1}")
+            break
+
+        print(f"[DEBUG][list_table_rows_paged] page={page} top={top} skip={skip} count={len(batch)}")
+        for row in batch:
+            total += 1
+            yield row
+
+        # próximo bloco
+        skip += top
+
+# ---- Outras helpers ----
 def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     body = {"index": None, "values": values_2d}
@@ -209,7 +236,7 @@ def month_bounds(d: datetime):
     return first, last
 
 def parse_range_address(address: str):
-    """Ex.: 'LstPrd!A1:U535' → sheet, start_col, start_row, end_col, end_row"""
+    """Ex.: 'LstPrd!A1:U535' → sheet, start_col, start_row, end_col, end_row (mantido caso precises)"""
     sheet, cells = address.split("!")
     start, end = cells.split(":")
     import re
@@ -233,7 +260,7 @@ def delete_table_rows_by_index_batch(
     com endereçamento via função: rows/$/ItemAt(index={n}).
     Recolhe as falhas e devolve {"deleted": X, "failed": [indices...]}.
 
-    Se o $batch falhar com ApiNotFound/InvalidArgument, tenta fallback sequencial.
+    Se o $batch falhar (InvalidArgument/ApiNotFound, etc.), tenta fallback sequencial.
     """
     if not row_indices:
         print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
@@ -331,19 +358,20 @@ def delete_table_rows_by_index_batch(
     return {"deleted": deleted_total, "failed": sorted(set(failed_global), reverse=True)}
 
 # ---- Helpers para “sweep” final (recalcula índices e apaga 1 a 1)
-def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end):
-    """Volta a ler a tabela e devolve os índices (0-based) das rows do mês atual."""
-    rows = list_table_rows(drive_id, item_id, table_name, session_id)
+def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, top=None):
+    """Volta a ler a Tabela em páginas e devolve os índices (0-based) das rows do mês atual."""
     indices = []
-    for i, r in enumerate(rows):
+    for r in list_table_rows_paged(drive_id, item_id, table_name, session_id, top=top):
+        idx = r.get("index")
         vals = (r.get("values", [[]])[0] or [])
-        if len(vals) > date_idx:
-            d = excel_value_to_date(vals[date_idx])
-            if d and month_start <= d.date() <= month_end:
-                indices.append(i)
+        if idx is None or len(vals) <= date_idx:
+            continue
+        d = excel_value_to_date(vals[date_idx])
+        if d and month_start <= d.date() <= month_end:
+            indices.append(int(idx))
     return indices
 
-def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, max_iters=5000):
+def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, max_iters=5000, top=None):
     """
     Sweep final: enquanto existirem linhas do mês atual, apaga 1 a 1 (DELETE unitário).
     Útil para remover pendentes que falharam no $batch por drift de índice.
@@ -352,7 +380,7 @@ def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, dat
     iters = 0
     while iters < max_iters:
         iters += 1
-        indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end)
+        indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, top=top)
         if not indices:
             break
         # apaga a de MAIOR índice (mais seguro)
@@ -366,7 +394,7 @@ def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, dat
             print("[DEBUG][SWEEP] STATUS:", r.status_code)
             try: print("[DEBUG][SWEEP] JSON:", r.json())
             except Exception: print("[DEBUG][SWEEP] TEXT:", r.text)
-            # se falhar, tentamos a próxima iteração
+            # tenta novamente noutra iteração
             continue
         deleted += 1
     print(f"[DEBUG][SWEEP] Removidas no sweep: {deleted}")
@@ -402,11 +430,12 @@ try:
     month_start, month_end = month_bounds(today)
     print(f"[DEBUG] Mês atual: {month_start} a {month_end}")
 
-    # --- Origens: filtrar mês atual e reordenar p/ o destino ---
-    src_rows = list_table_rows(drive_id, src_id, SRC_TABLE, src_sid)
-    src_values = [r.get("values", [[]])[0] for r in src_rows]
+    # --- Origens: filtrar mês atual e reordenar p/ o destino (paginação) ---
     to_import = []
-    for vals in src_values:
+    for r in list_table_rows_paged(drive_id, src_id, SRC_TABLE, src_sid):
+        vals = (r.get("values", [[]])[0] or [])
+        if len(vals) <= date_idx_src:
+            continue
         d = excel_value_to_date(vals[date_idx_src])
         if d and month_start <= d.date() <= month_end:
             to_import.append(reorder_values_by_headers(src_headers, dst_headers, vals))
@@ -415,18 +444,19 @@ try:
     if not to_import:
         print("Nada para importar.")
     else:
-        # --- Destino: índices a remover (mês atual) ---
-        dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
+        # --- Destino: índices a remover (mês atual) em páginas ---
         indices_to_delete = []
-        for i, r in enumerate(dst_rows):  # i = índice 0-based no corpo da tabela
+        for r in list_table_rows_paged(drive_id, dst_id, DST_TABLE, dst_sid):
+            idx = r.get("index")
             vals = (r.get("values", [[]])[0] or [])
-            if len(vals) > date_idx_dst:
-                d = excel_value_to_date(vals[date_idx_dst])
-                if d and month_start <= d.date() <= month_end:
-                    indices_to_delete.append(i)
+            if idx is None or len(vals) <= date_idx_dst:
+                continue
+            d = excel_value_to_date(vals[date_idx_dst])
+            if d and month_start <= d.date() <= month_end:
+                indices_to_delete.append(int(idx))
 
-        print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
+        print(f"[DEBUG] Amostra índices: {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
 
         # --- Apagar via $batch + seq parcial (recolhe falhas) ---
         if indices_to_delete:
@@ -438,7 +468,7 @@ try:
 
             # --- Sweep final: recalcula índices e apaga remanescentes do mês ---
             sweep_deleted = cleanup_month_rows_sequential(
-                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end
+                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end, top=int(os.getenv("GRAPH_ROWS_TOP") or "500")
             )
             print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
         else:
@@ -449,5 +479,4 @@ try:
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
 
 finally:
-    close_session(drive_id, src_id, src_sid)
-    close_session(drive_id, dst_id, dst_sid)
+       close_session(drive_id, src_id, src_sid)
