@@ -141,7 +141,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
     Devolve dicionários tal como o endpoint: cada item tem 'index' (0-based no corpo da Tabela) e 'values'.
     """
     if top is None:
-        top = int(os.getenv("GRAPH_ROWS_TOP") or "500")
+        top = int(os.getenv("GRAPH_ROWS_TOP") or "5000")
 
     h = dict(base_headers); h["workbook-session-id"] = session_id
     base_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
