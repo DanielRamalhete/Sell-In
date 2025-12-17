@@ -480,3 +480,4 @@ try:
 
 finally:
        close_session(drive_id, src_id, src_sid)
+       close_session(drive_id, dst_id, dst_sid)
