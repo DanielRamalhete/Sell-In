@@ -14,7 +14,7 @@ SITE_PATH      = os.getenv("SITE_PATH")
 SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Ruturas de Stocks Mensal.xlsx"
 SRC_TABLE      = "TabelaAutomatica"
 
-DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Rutura de Stocks.xlsx"
+DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Rutura de Stock.xlsx"
 DST_TABLE      = "Historico"
 
 DATE_COLUMN    = "Data da Visita"
