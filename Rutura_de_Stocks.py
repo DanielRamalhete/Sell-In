@@ -11,7 +11,7 @@ CLIENT_SECRET  = os.getenv("CLIENT_SECRET")
 SITE_HOSTNAME  = os.getenv("SITE_HOSTNAME")
 SITE_PATH      = os.getenv("SITE_PATH")
 
-SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Rutura de Stocks Mensal.xlsx"
+SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Ruturas de Stocks Mensal.xlsx"
 SRC_TABLE      = "TabelaAutomatica"
 
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Rutura de Stocks.xlsx"
