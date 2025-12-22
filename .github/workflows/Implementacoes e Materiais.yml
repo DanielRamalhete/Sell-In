@@ -28,11 +28,17 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Executar teste de conexão
+      
+      - name: Executar script com retry (nick-fields/retry)
+        uses: nick-fields/retry@v2
+        with:
+          max_attempts: 3
+          retry_on: error
+          command: |
+            python Implementacoes_e_Materiais.py
         env:
           TENANT_ID: ${{ secrets.TENANT_ID }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
-        run: python Implementacoes_e_Materiais.py
