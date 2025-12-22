@@ -148,10 +148,13 @@ def list_table_rows(drive_id, item_id, table_name, session_id):
 
 def add_rows(drive_id, item_id, table_name, session_id, values_2d):
     h = dict(base_headers); h["workbook-session-id"] = session_id
+    print("[DEBUG][H]:", {h})
     body = {"index": None, "values": values_2d}
+    print("[DEBUG][H]:", {body})
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add"
     print(f"[DEBUG][ADD] {url} count={len(values_2d)}")
     r = requests.post(url, headers=h, data=json.dumps(body))
+    print("[DEBUG][H]:", {r})
     if not r.ok:
         print("[DEBUG][ADD] STATUS:", r.status_code)
         try: print("[DEBUG][ADD] JSON:", r.json())
