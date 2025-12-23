@@ -28,15 +28,30 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      
-      - name: Executar script com retry (nick-fields/retry)
+      - name: Executar Implementacoes.py com retry
         uses: nick-fields/retry@v2
         with:
           max_attempts: 3
           timeout_minutes: 60
           retry_on: error
           command: |
-            python Implementacoes_e_Materiais.py
+            python Implementacoes.py
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
+          SITE_PATH: ${{ secrets.SITE_PATH }}
+
+      - name: Executar Materiais.py com retry (só corre se o anterior tiver sucesso)
+        if: ${{ success() }} # redundante, mas explícito
+        uses: nick-fields/retry@v2
+        with:
+          max_attempts: 3
+          timeout_minutes: 60
+          retry_on: error
+          command: |
+            python Materiais.py
         env:
           TENANT_ID: ${{ secrets.TENANT_ID }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
