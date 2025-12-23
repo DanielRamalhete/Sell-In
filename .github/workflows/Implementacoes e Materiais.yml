@@ -33,6 +33,7 @@ jobs:
         uses: nick-fields/retry@v2
         with:
           max_attempts: 3
+          timeout_minutes: 60
           retry_on: error
           command: |
             python Implementacoes_e_Materiais.py
