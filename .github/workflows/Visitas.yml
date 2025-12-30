@@ -1,5 +1,5 @@
 
-name: Visitas Wize
+name: Visitas
 
 on:
   # Continua a permitir execução manual
@@ -35,4 +35,4 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
-        run: python Visitas_Wize.py
+        run: python Visitas.py
