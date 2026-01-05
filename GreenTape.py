@@ -15,8 +15,14 @@ SITE_PATH      = os.getenv("SITE_PATH")
 
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTape.xlsx"
 DST_TABLE      = "Historico"
-
 DATE_COLUMN    = "Data Entrega"
+
+# Estratégia: "block" (sort + delete bloco) ou "batch" (deletes em lotes descendentes)
+MODE           = os.getenv("MODE", "block")   # "block" | "batch"
+BATCH_SIZE     = int(os.getenv("BATCH_SIZE", "20"))
+
+# "rolling" = últimos 24 meses a partir de hoje; "fullmonth" = desde 1º dia do mês corrente - 24 meses
+CUTOFF_MODE    = os.getenv("CUTOFF_MODE", "rolling")  # "rolling" | "fullmonth"
 # ==========================
 
 # ---- Autenticação ----
