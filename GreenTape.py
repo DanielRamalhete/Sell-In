@@ -1,4 +1,4 @@
-Eu quero que isto seja base do meu código:
+
 import os, json, requests, msal
 from datetime import datetime, timedelta
 
