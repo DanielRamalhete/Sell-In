@@ -50,12 +50,12 @@ def close_session(drive_id, item_id, session_id):
 
 
 # ---- Helpers específicos do Excel ----
-def workbook_headers(session_id: str) -> Dict[str, str]:
+def workbook_headers(session_id: str) -> dict[str, str]:
     h = dict(base_headers)
     h["workbook-session-id"] = session_id
     return h
 
-def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, session_id: str) -> Dict[str, Any]:
+def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, session_id: str) -> dict[str, Any]:
     """
     Retorna:
       {
