@@ -48,16 +48,15 @@ def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
 
-
 # ---- Helpers específicos do Excel ----
-def workbook_headers(session_id: str) -> dict[str, str]:
+def workbook_headers(session_id):
     h = dict(base_headers)
     h["workbook-session-id"] = session_id
     return h
 
-def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, session_id: str) -> dict[str, any]:
+def get_table_header_and_rows(drive_id, item_id, table_name, session_id):
     """
-    Retorna:
+    Retorna dicionário:
       {
         "headers": ["Col1", "Col2", ...],
         "rows": [ [v11, v12, ...], [v21, v22, ...], ... ]
@@ -70,7 +69,7 @@ def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, sess
         headers=h
     )
     r.raise_for_status()
-    rng = r.json()  # contém address, values, text, etc.
+    rng = r.json()
     values = rng.get("values", [])
     if not values:
         return {"headers": [], "rows": []}
@@ -78,7 +77,7 @@ def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, sess
     rows = values[1:] if len(values) > 1 else []
     return {"headers": headers, "rows": rows}
 
-def delete_table_row(drive_id: str, item_id: str, table_name: str, session_id: str, row_index: int) -> None:
+def delete_table_row(drive_id, item_id, table_name, session_id, row_index):
     """
     Apaga a linha pelo índice 0-based dentro da tabela (exclui header).
     Endpoint: /workbook/tables/{name}/rows/{index}
@@ -91,9 +90,9 @@ def delete_table_row(drive_id: str, item_id: str, table_name: str, session_id: s
     r.raise_for_status()
 
 # ---- Utilidades de data ----
-def months_ago(dt: datetime, months: int) -> datetime:
+def months_ago(dt, months):
     """
-    Subtrai 'months' meses de dt preservando dia quando possível.
+    Subtrai 'months' meses de dt preservando o dia quando possível.
     Ex.: 2026-01-05 - 24 meses = 2024-01-05
     """
     year = dt.year
@@ -101,16 +100,13 @@ def months_ago(dt: datetime, months: int) -> datetime:
     while month <= 0:
         month += 12
         year -= 1
-    # Ajuste do dia para evitar finais de mês inválidos (p.ex. 31 em fevereiro)
     day = dt.day
-    # Número de dias do novo mês:
-    import calendar
     max_day = calendar.monthrange(year, month)[1]
     if day > max_day:
         day = max_day
     return datetime(year, month, day, dt.hour, dt.minute, dt.second, dt.microsecond, tzinfo=dt.tzinfo)
 
-def parse_date_any(value) -> datetime | None:
+def parse_date_any(value):
     """
     Tenta interpretar células de data vindas do Excel: string, número serial ou ISO.
     Retorna timezone-aware (UTC) ou None se não conseguir.
@@ -118,7 +114,7 @@ def parse_date_any(value) -> datetime | None:
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return None
 
-    # Excel serial date (dias desde 1899-12-30); cuidado com o leap bug de 1900
+    # Excel serial date (dias desde 1899-12-30)
     if isinstance(value, (int, float)):
         try:
             excel_epoch = datetime(1899, 12, 30, tzinfo=timezone.utc)
@@ -169,15 +165,12 @@ def keep_last_24_months():
         cutoff  = months_ago(now_utc, 24)
 
         # Encontrar quais índices devem ser removidos (0-based relativo às linhas de dados, não incluindo header)
-        indices_to_delete: List[int] = []
+        indices_to_delete = []
         for i, row in enumerate(rows):
-            # Garantir comprimento
             val = row[date_col_idx] if date_col_idx < len(row) else None
             dt  = parse_date_any(val)
             if dt is None:
-                # Se não consegue interpretar, considera como muito antigo? Melhor: manter.
-                # Podes mudar para remover se preferires:
-                # indices_to_delete.append(i)
+                # Se não consegue interpretar, mantém (podes optar por remover).
                 continue
             if dt < cutoff:
                 indices_to_delete.append(i)
@@ -191,7 +184,7 @@ def keep_last_24_months():
         for idx in indices_to_delete:
             delete_table_row(drive_id, item_id, DST_TABLE, session_id, idx)
 
-        print(f"Removidas {len(indices_to_delete)} linhas anteriores a {cutoff.date()} (últimos 24 meses mantidos).")
+        print(f"Removidas {len(indices_to_delete)} linhas anteriores a {cutoff.date()} (mantidos últimos 24 meses).")
 
     finally:
         close_session(drive_id, item_id, session_id)
