@@ -47,6 +47,7 @@ def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
 
+
 # ---- Helpers específicos do Excel ----
 def workbook_headers(session_id):
     h = dict(base_headers)
@@ -55,12 +56,8 @@ def workbook_headers(session_id):
 
 def get_table_header_and_rows(drive_id, item_id, table_name, session_id):
     """
-    Retorna dicionário:
-      {
-        "headers": ["Col1", "Col2", ...],
-        "rows": [ [v11, v12, ...], [v21, v22, ...], ... ]
-      }
-    Lê via /workbook/tables/{name}/range
+    Lê a tabela completa via /workbook/tables/{name}/range.
+    Retorna dict: {"headers": [...], "rows": [[...], ...]}
     """
     h = workbook_headers(session_id)
     r = requests.get(
@@ -76,9 +73,52 @@ def get_table_header_and_rows(drive_id, item_id, table_name, session_id):
     rows = values[1:] if len(values) > 1 else []
     return {"headers": headers, "rows": rows}
 
+def get_table_databody_range(drive_id, item_id, table_name, session_id):
+    """
+    Retorna o DataBodyRange (sem header) com address e values já na ordem atual da folha.
+    """
+    h = workbook_headers(session_id)
+    r = requests.get(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange",
+        headers=h
+    )
+    r.raise_for_status()
+    return r.json()  # address, values, rowCount, columnCount, etc.
+
+def table_sort_by_column(drive_id, item_id, table_name, session_id, column_index_zero_based, ascending=True):
+    """
+    Ordena a tabela pelo índice de coluna (0-based dentro da tabela).
+    Endpoint: /workbook/tables/{name}/sort/apply
+    """
+    h = workbook_headers(session_id)
+    body = {
+        "fields": [
+            {
+                "key": column_index_zero_based,
+                "ascending": ascending
+            }
+        ],
+        "matchCase": False
+    }
+    r = requests.post(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/sort/apply",
+        headers=h, data=json.dumps(body)
+    )
+    r.raise_for_status()
+
+def delete_range_on_sheet(drive_id, item_id, sheet_name, addr_a1, session_id):
+    """
+    Apaga um range A1-style numa folha, com shift Up (para "subir" as linhas seguintes).
+    Endpoint: /workbook/worksheets/{sheet}/range(address='{A1}')/delete
+    """
+    h = workbook_headers(session_id)
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{sheet_name}/range(address='{addr_a1}')/delete"
+    r = requests.post(url, headers=h, data=json.dumps({"shift": "Up"}))
+    r.raise_for_status()
+
 def delete_table_row(drive_id, item_id, table_name, session_id, row_index):
     """
-    Apaga a linha pelo índice 0-based dentro da tabela (exclui header).
+    Apaga uma linha pelo índice 0-based dentro da tabela (exclui header).
     Endpoint: /workbook/tables/{name}/rows/{index}
     """
     h = workbook_headers(session_id)
@@ -88,11 +128,32 @@ def delete_table_row(drive_id, item_id, table_name, session_id, row_index):
     )
     r.raise_for_status()
 
+
+# ---- Utilidades de endereço A1 ----
+def _parse_a1_address(addr):
+    # Ex.: "Folha1!A2:Z100" -> ("Folha1", "A2", "Z100")
+    if "!" in addr:
+        sheet, rng = addr.split("!", 1)
+    else:
+        sheet, rng = None, addr
+    if ":" in rng:
+        start, end = rng.split(":", 1)
+    else:
+        start, end = rng, rng
+    return sheet, start, end
+
+def _split_col_row(a1):
+    # "AB123" -> ("AB", 123)
+    i = 0
+    while i < len(a1) and a1[i].isalpha():
+        i += 1
+    return a1[:i], int(a1[i:]) if i < len(a1) else 1
+
+
 # ---- Utilidades de data ----
 def months_ago(dt, months):
     """
     Subtrai 'months' meses de dt preservando o dia quando possível.
-    Ex.: 2026-01-05 - 24 meses = 2024-01-05
     """
     year = dt.year
     month = dt.month - months
@@ -105,15 +166,22 @@ def months_ago(dt, months):
         day = max_day
     return datetime(year, month, day, dt.hour, dt.minute, dt.second, dt.microsecond, tzinfo=dt.tzinfo)
 
+def cutoff_datetime(mode="rolling"):
+    now_utc = datetime.now(timezone.utc)
+    if mode == "fullmonth":
+        start_this_month = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return months_ago(start_this_month, 24)
+    return months_ago(now_utc, 24)
+
 def parse_date_any(value):
     """
-    Tenta interpretar células de data vindas do Excel: string, número serial ou ISO.
+    Tenta interpretar células de data: string, número serial Excel ou ISO.
     Retorna timezone-aware (UTC) ou None se não conseguir.
     """
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return None
 
-    # Excel serial date (dias desde 1899-12-30)
+    # Excel serial date (dias desde 1899-12-30; cuidado com leap bug de 1900)
     if isinstance(value, (int, float)):
         try:
             excel_epoch = datetime(1899, 12, 30, tzinfo=timezone.utc)
@@ -137,56 +205,153 @@ def parse_date_any(value):
                 pass
     return None
 
-# ---- Lógica principal: manter apenas últimos 24 meses ----
-def keep_last_24_months():
+
+# ---- Batch helpers (apagar por lotes descendentes) ----
+def chunked_desc(indices, size):
+    """Divide a lista em chunks e ordena cada chunk descendentemente."""
+    indices_sorted = sorted(indices, reverse=True)
+    for i in range(0, len(indices_sorted), size):
+        yield indices_sorted[i:i+size]
+
+def batch_delete_rows(drive_id, item_id, table_name, session_id, indices_chunk):
+    """
+    Envia um POST /$batch com até 20 deletes (limite típico).
+    Coloca 'workbook-session-id' em cada sub-request para garantir persistência na sessão.
+    """
+    batch_url = f"{GRAPH_BASE}/$batch"
+    requests_body = []
+    for j, idx in enumerate(indices_chunk, start=1):
+        sub = {
+            "id": str(j),
+            "method": "DELETE",
+            "url": f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
+            "headers": {
+                "workbook-session-id": session_id
+            }
+        }
+        requests_body.append(sub)
+
+    body = {"requests": requests_body}
+    h = dict(base_headers)
+    r = requests.post(batch_url, headers=h, data=json.dumps(body))
+    r.raise_for_status()
+
+    resp = r.json()
+    errors = []
+    for sub in resp.get("responses", []):
+        status = sub.get("status", 0)
+        if status >= 400:
+            errors.append({"id": sub.get("id"), "status": status, "body": sub.get("body")})
+    if errors:
+        raise RuntimeError(f"Falhas no batch: {errors}")
+
+def delete_rows_in_batches(drive_id, item_id, table_name, session_id, indices_to_delete, batch_size=20):
+    """Apaga índices fornecidos em batches descendentes."""
+    total = len(indices_to_delete)
+    if total == 0:
+        return 0
+    deleted = 0
+    for chunk in chunked_desc(indices_to_delete, batch_size):
+        batch_delete_rows(drive_id, item_id, table_name, session_id, chunk)
+        deleted += len(chunk)
+    return deleted
+
+
+# ---- Função principal ----
+def keep_last_24_months(mode="block"):
     site_id  = get_site_id()
     drive_id = get_drive_id(site_id)
     item_id  = get_item_id(drive_id, DST_FILE_PATH)
 
     session_id = create_session(drive_id, item_id)
     try:
-        data = get_table_header_and_rows(drive_id, item_id, DST_TABLE, session_id)
-        headers = data["headers"]
-        rows    = data["rows"]
-
+        # Ler headers para descobrir o índice da coluna de data
+        data_all = get_table_header_and_rows(drive_id, item_id, DST_TABLE, session_id)
+        headers = data_all["headers"]
         if not headers:
             print("Tabela vazia ou sem headers.")
             return
 
-        # Índice da coluna de data
         try:
             date_col_idx = headers.index(DATE_COLUMN)
         except ValueError:
             raise RuntimeError(f"A coluna '{DATE_COLUMN}' não foi encontrada na tabela '{DST_TABLE}'.")
 
-        # Cutoff = hoje (UTC) - 24 meses
-        now_utc = datetime.now(timezone.utc)
-        cutoff  = months_ago(now_utc, 24)
+        cutoff = cutoff_datetime(CUTOFF_MODE)
 
-        # Encontrar quais índices devem ser removidos (0-based relativo às linhas de dados, não incluindo header)
-        indices_to_delete = []
-        for i, row in enumerate(rows):
-            val = row[date_col_idx] if date_col_idx < len(row) else None
-            dt  = parse_date_any(val)
-            if dt is None:
-                # Se não consegue interpretar, mantém (podes optar por remover).
-                continue
-            if dt < cutoff:
-                indices_to_delete.append(i)
+        if mode == "block":
+            # 1) Ordenar ascendente pela coluna de data (0-based)
+            table_sort_by_column(drive_id, item_id, DST_TABLE, session_id, date_col_idx, ascending=True)
 
-        if not indices_to_delete:
-            print("Nenhuma linha antiga encontrada. Nada a apagar.")
-            return
+            # 2) Obter DataBodyRange (sem header), já ordenado
+            body = get_table_databody_range(drive_id, item_id, DST_TABLE, session_id)
+            values = body.get("values", [])
+            if not values:
+                print("Sem linhas no corpo da tabela.")
+                return
 
-        # Apagar de trás para a frente para não deslocar índices
-        indices_to_delete.sort(reverse=True)
-        for idx in indices_to_delete:
-            delete_table_row(drive_id, item_id, DST_TABLE, session_id, idx)
+            # 3) Contar quantas linhas iniciais estão < cutoff (contíguas no topo)
+            delete_count = 0
+            for row in values:
+                val = row[date_col_idx] if date_col_idx < len(row) else None
+                dt  = parse_date_any(val)
+                # Se a data não é parsável, paramos para não apagar indevidamente
+                if dt is None or dt >= cutoff:
+                    break
+                delete_count += 1
 
-        print(f"Removidas {len(indices_to_delete)} linhas anteriores a {cutoff.date()} (mantidos últimos 24 meses).")
+            if delete_count == 0:
+                print("Nenhuma linha para remover (já só tens últimos 24 meses).")
+                return
+
+            # 4) Construir address A1 do bloco a apagar
+            address = body.get("address")  # ex.: "Folha1!A2:Z100"
+            sheet_name, start_a1, end_a1 = _parse_a1_address(address)
+            if not sheet_name:
+                raise RuntimeError(f"Endereço inesperado: {address}")
+
+            start_col, start_row = _split_col_row(start_a1)
+            end_col,   _end_row  = _split_col_row(end_a1)
+
+            del_start = start_row
+            del_end   = start_row + delete_count - 1
+            del_addr  = f"{start_col}{del_start}:{end_col}{del_end}"
+
+            # 5) Apagar o bloco de uma só vez (shift Up)
+            delete_range_on_sheet(drive_id, item_id, sheet_name, del_addr, session_id)
+
+            print(f"[BLOCK] Removidas {delete_count} linhas anteriores a {cutoff.date()} (1 operação).")
+
+        elif mode == "batch":
+            # 1) Vamos ler todas as linhas (sem ordenar) e calcular índices a apagar
+            rows = data_all["rows"]
+            if not rows:
+                print("Sem linhas de dados.")
+                return
+
+            indices_to_delete = []
+            for i, row in enumerate(rows):
+                val = row[date_col_idx] if date_col_idx < len(row) else None
+                dt  = parse_date_any(val)
+                if dt is None:
+                    # Mantém (podes alterar para remover)
+                    continue
+                if dt < cutoff:
+                    indices_to_delete.append(i)
+
+            if not indices_to_delete:
+                print("Nenhuma linha antiga encontrada. Nada a apagar.")
+                return
+
+            deleted = delete_rows_in_batches(drive_id, item_id, DST_TABLE, session_id, indices_to_delete, batch_size=BATCH_SIZE)
+            print(f"[BATCH] Removidas {deleted} linhas anteriores a {cutoff.date()} em lotes descendentes (até {BATCH_SIZE} por batch).")
+
+        else:
+            raise ValueError(f"MODE inválido: {mode}")
 
     finally:
         close_session(drive_id, item_id, session_id)
 
+
 if __name__ == "__main__":
-    keep_last_24_months()
+    keep_last_24_months(mode=MODE)
