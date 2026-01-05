@@ -55,7 +55,7 @@ def workbook_headers(session_id: str) -> dict[str, str]:
     h["workbook-session-id"] = session_id
     return h
 
-def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, session_id: str) -> dict[str, Any]:
+def get_table_header_and_rows(drive_id: str, item_id: str, table_name: str, session_id: str) -> dict[str, any]:
     """
     Retorna:
       {
