@@ -173,7 +173,7 @@ def months_ago(dt, months):
     return datetime(year, month, day, dt.hour, dt.minute, dt.second, dt.microsecond, tzinfo=dt.tzinfo)
 
 def cutoff_datetime(mode="rolling"):
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc) - timedelta(days=1)
     if mode == "fullmonth":
         start_this_month = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         return months_ago(start_this_month, 24)
