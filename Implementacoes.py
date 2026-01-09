@@ -535,7 +535,7 @@ try:
     date_idx_src = src_headers.index(DATE_COLUMN)
     date_idx_dst = dst_headers.index(DATE_COLUMN)
 
-    today = datetime.today()
+    today = datetime.today() - timedelta(days=1)
     month_start, month_end = month_bounds(today)
     print(f"[DEBUG] Mês atual: {month_start} a {month_end}")
 
