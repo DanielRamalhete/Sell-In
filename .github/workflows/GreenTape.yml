@@ -34,4 +34,4 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
-        run: python GreenTape.py
+        run: python A.py
