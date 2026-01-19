@@ -1,22 +1,23 @@
+
 name: GreenTape
 
 on:
-  # Continua a permitir execução manual
   workflow_dispatch:
 
-  # Agendamentos (GitHub Actions usa UTC)
   schedule:
-    # Inverno em PT (Nov–Mar): 03:05 UTC = 03:05 PT
+    # Inverno em PT (Nov–Mar): 05:05 UTC = 05:05 PT
     - cron: '5 5 * 11-12 *'  # Novembro–Dezembro
     - cron: '5 5 * 1-3 *'    # Janeiro–Março
-    # Verão em PT (Apr–Oct): 02:05 UTC = 03:05 PT
+
+    # Verão em PT (Apr–Oct): 04:05 UTC = 05:05 PT
     - cron: '5 4 * 4-10 *'   # Abril–Outubro
 
 jobs:
-  test-connection:
+  run-greentape-then-a:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout código
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -27,11 +28,20 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Executar teste de conexão
+      - name: Executar GreenTape.py
         env:
           TENANT_ID: ${{ secrets.TENANT_ID }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
-        run: python A.py
+        run: python GreenTape.py
+
+      - name: Executar GreenTapeCSV.py (apenas se GreenTape correr bem)
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
+          SITE_PATH: ${{ secrets.SITE_PATH }}
+        run: python GreenTapeCSV.py
