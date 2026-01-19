@@ -3,6 +3,10 @@ import os, json, requests, msal
 from datetime import datetime, timedelta, timezone
 import calendar
 
+# PATCH: CSV exports
+import csv
+import io
+
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
