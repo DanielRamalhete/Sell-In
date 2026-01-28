@@ -19,7 +19,7 @@ DATE_COLUMN = "Data Entrega"
 MODE = os.getenv("MODE", "block")  # "block" | "batch"
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
 
-# "rolling" = últimos 24 meses a partir de hoje; "fullmonth" = desde 1º dia do mês corrente - 24 meses
+# "rolling" = últimos 24 meses a partir de hoje; "fullmonth" = 1º dia do mês corrente - 24 meses
 CUTOFF_MODE = os.getenv("CUTOFF_MODE", "rolling")  # "rolling" | "fullmonth"
 
 # Paginação (para leitura de rows via /rows?$top&$skip)
@@ -155,77 +155,6 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
         skip += top
 
 # ===== Outras helpers específicas do Excel =====
-def get_table_databody_range(drive_id, item_id, table_name, session_id):
-    """
-    Tenta obter o DataBodyRange (sem header).
-    Fallback: usa /range, remove a 1ª linha (headers) e ajusta o address para começar uma linha abaixo.
-    Retorna um dicionário com chaves: address, values, rowCount, columnCount.
-    """
-    h = workbook_headers(session_id)
-
-    # 1) dataBodyRange
-    url_body = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
-    r = requests.get(url_body, headers=h)
-    if r.ok:
-        return r.json()
-
-    # --- Fallback ---
-    print("[DEBUG][dataBodyRange] Falhou com STATUS:", r.status_code)
-    try:
-        print("[DEBUG][dataBodyRange] JSON:", r.json())
-    except Exception:
-        print("[DEBUG][dataBodyRange] TEXT:", r.text)
-
-    # 2) /range (inclui headers na 1ª linha)
-    url_rng = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
-    rr = requests.get(url_rng, headers=h)
-    if not rr.ok:
-        print("[DEBUG][range] Falhou também. STATUS:", rr.status_code)
-        try: print("[DEBUG][range] JSON:", rr.json())
-        except Exception: print("[DEBUG][range] TEXT:", rr.text)
-        rr.raise_for_status()
-
-    rng = rr.json()
-    values_all = rng.get("values", [])
-    address_all = rng.get("address")  # ex.: "Folha1!A1:Z100"
-
-    if not values_all or not isinstance(values_all, list):
-        return {"address": address_all, "values": [], "rowCount": 0, "columnCount": 0}
-
-    values_body = values_all[1:] if len(values_all) > 1 else []
-
-    # Ajustar address (se possível)
-    if address_all and "!" in address_all and ":" in address_all and values_body:
-        sheet, cells = address_all.split("!", 1)
-        start, end = cells.split(":", 1)
-
-        def split_col_row(a1):
-            i = 0
-            while i < len(a1) and a1[i].isalpha():
-                i += 1
-            col = a1[:i]
-            row = int(a1[i:]) if i < len(a1) else 1
-            return col, row
-
-        s_col, s_row = split_col_row(start)
-        e_col, e_row = split_col_row(end)
-        address_body = f"{sheet}!{s_col}{s_row+1}:{e_col}{e_row}"
-    else:
-        address_body = address_all
-
-    col_count = 0
-    if values_all and isinstance(values_all[0], list):
-        col_count = len(values_all[0])
-    elif values_body and isinstance(values_body[0], list):
-        col_count = len(values_body[0])
-
-    return {
-        "address": address_body,
-        "values": values_body,
-        "rowCount": len(values_body),
-        "columnCount": col_count
-    }
-
 def table_sort_by_column(drive_id, item_id, table_name, session_id, column_index_zero_based, ascending=True):
     """
     Ordena a tabela pelo índice de coluna (0-based dentro da tabela).
@@ -239,28 +168,6 @@ def table_sort_by_column(drive_id, item_id, table_name, session_id, column_index
     r = requests.post(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/sort/apply",
         headers=h, data=json.dumps(body)
-    )
-    r.raise_for_status()
-
-def delete_range_on_sheet(drive_id, item_id, sheet_name, addr_a1, session_id):
-    """
-    Apaga um range A1-style numa folha, com shift Up (para "subir" as linhas seguintes).
-    Endpoint: /workbook/worksheets/{sheet}/range(address='{A1}')/delete
-    """
-    h = workbook_headers(session_id)
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{sheet_name}/range(address='{addr_a1}')/delete"
-    r = requests.post(url, headers=h, data=json.dumps({"shift": "Up"}))
-    r.raise_for_status()
-
-def delete_table_row(drive_id, item_id, table_name, session_id, row_index):
-    """
-    Apaga uma linha pelo índice 0-based dentro da tabela (exclui header).
-    Endpoint: /workbook/tables/{name}/rows/{index}
-    """
-    h = workbook_headers(session_id)
-    r = requests.delete(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{row_index}",
-        headers=h
     )
     r.raise_for_status()
 
@@ -342,51 +249,121 @@ def parse_date_any(value):
                 pass
     return None
 
-# ---- Batch helpers (apagar por lotes descendentes) ----
-def chunked_desc(indices, size):
-    """Divide a lista em chunks e ordena cada chunk descendentemente."""
-    indices_sorted = sorted(indices, reverse=True)
-    for i in range(0, len(indices_sorted), size):
-        yield indices_sorted[i:i+size]
+# ---- DELETE via $batch (ItemAt) + fallback sequencial ----
+def delete_single_row_itemat(drive_id, item_id, table_name, session_id, idx):
+    """Apaga 1 linha via ItemAt(index=idx). Útil como fallback sequencial."""
+    h = workbook_headers(session_id)
+    abs_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
+    r = requests.delete(abs_url, headers=h)
+    if not r.ok:
+        print("[DEBUG][DEL-ONE] STATUS:", r.status_code)
+        try: print("[DEBUG][DEL-ONE] JSON:", r.json())
+        except Exception: print("[DEBUG][DEL-ONE] TEXT:", r.text)
+        return False
+    return True
 
-def batch_delete_rows(drive_id, item_id, table_name, session_id, indices_chunk):
+def delete_table_rows_by_index_batch(
+    drive_id, item_id, table_name, session_id, row_indices,
+    max_batch_size=20, max_retries=3, fallback_sequential=True
+):
     """
-    Envia um POST /$batch com até 20 deletes (limite típico).
-    Coloca 'workbook-session-id' em cada sub-request para garantir persistência na sessão.
+    Apaga linhas por índices via $batch com ItemAt(index=...).
+    Se algum subpedido falhar, opcionalmente tenta em modo sequencial para esse índice.
     """
-    batch_url = f"{GRAPH_BASE}/$batch"
-    requests_body = []
-    for j, idx in enumerate(indices_chunk, start=1):
-        sub = {
-            "id": str(j),
-            "method": "DELETE",
-            "url": f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
-            "headers": {"workbook-session-id": session_id}
-        }
-        requests_body.append(sub)
-    body = {"requests": requests_body}
-    h = dict(base_headers)
-    r = requests.post(batch_url, headers=h, data=json.dumps(body))
-    r.raise_for_status()
-    resp = r.json()
-    errors = []
-    for sub in resp.get("responses", []):
-        status = sub.get("status", 0)
-        if status >= 400:
-            errors.append({"id": sub.get("id"), "status": status, "body": sub.get("body")})
-    if errors:
-        raise RuntimeError(f"Falhas no batch: {errors}")
+    if not row_indices:
+        print("[DEBUG][BATCH-DEL] Sem índices para apagar.")
+        return {"deleted": 0, "failed": []}
 
-def delete_rows_in_batches(drive_id, item_id, table_name, session_id, indices_to_delete, batch_size=20):
-    """Apaga índices fornecidos em batches descendentes."""
-    total = len(indices_to_delete)
-    if total == 0:
-        return 0
-    deleted = 0
-    for chunk in chunked_desc(indices_to_delete, batch_size):
-        batch_delete_rows(drive_id, item_id, table_name, session_id, chunk)
-        deleted += len(chunk)
-    return deleted
+    # normaliza e ordena descendente para evitar shift
+    row_indices = sorted(set(row_indices), reverse=True)
+    print(f"[DEBUG][BATCH-DEL] Total de índices para apagar: {len(row_indices)}")
+
+    deleted_total = 0
+    failed_global = []
+
+    def chunks(lst, size):
+        for i in range(0, len(lst), size):
+            yield lst[i:i+size]
+
+    batch_endpoint = f"{GRAPH_BASE}/$batch"
+
+    for chunk in chunks(row_indices, max_batch_size):
+        requests_list = []
+        for i, idx in enumerate(chunk, start=1):
+            rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/$/ItemAt(index={idx})"
+            requests_list.append({
+                "id": str(i),
+                "method": "DELETE",
+                "url": rel_url,
+                "headers": {"workbook-session-id": session_id}
+            })
+        print("[DEBUG][BATCH-DEL] URLs no lote:", [req["url"] for req in requests_list])
+
+        payload = {"requests": requests_list}
+        attempt = 0
+
+        while True:
+            attempt += 1
+            print(f"[DEBUG][BATCH-DEL] POST {batch_endpoint} (lote {len(chunk)}, tentativa {attempt})")
+            r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
+
+            # Throttling
+            if r.status_code == 429 and attempt <= max_retries:
+                ra = int(r.headers.get("Retry-After", "5"))
+                print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {ra}s…")
+                import time; time.sleep(ra)
+                continue
+
+            if not r.ok:
+                print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
+                try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
+                except Exception: print("[DEBUG][BATCH-DEL] TEXT:", r.text)
+                # fallback sequencial para todo o chunk
+                if fallback_sequential:
+                    print("[DEBUG][BATCH-DEL] Falha no lote. Fallback sequencial de todo o chunk.")
+                    for idx in chunk:
+                        if delete_single_row_itemat(drive_id, item_id, table_name, session_id, idx):
+                            deleted_total += 1
+                        else:
+                            failed_global.append(idx)
+                    break  # sai do while True e passa ao próximo chunk
+                else:
+                    # sem fallback → marca todos como falhados
+                    failed_global.extend(chunk)
+                    break
+
+            # OK: analisar respostas
+            resp = r.json()
+            ok_ids = [e for e in resp.get("responses", []) if e.get("status") in (200, 204)]
+            deleted_total += len(ok_ids)
+
+            for e in resp.get("responses", []):
+                status = e.get("status")
+                if status not in (200, 204):
+                    body = e.get("body") or {}
+                    print("[DEBUG][BATCH-DEL] Falhou id", e.get("id"), "status:", status, "body:", body)
+                    # mapear o id ao índice no chunk
+                    try:
+                        failed_idx = chunk[int(e.get("id")) - 1]
+                        failed_global.append(failed_idx)
+                    except Exception:
+                        pass
+            break  # lote processado; avançar para o próximo
+
+    # Se houver falhados e fallback_sequencial=True, tenta novamente individualmente
+    if failed_global and fallback_sequential:
+        print(f"[DEBUG][BATCH-DEL] {len(failed_global)} falharam no batch. Retry imediato sequencial dessas.")
+        retry_failed = sorted(set(failed_global), reverse=True)
+        still_failed = []
+        for idx in retry_failed:
+            if delete_single_row_itemat(drive_id, item_id, table_name, session_id, idx):
+                deleted_total += 1
+            else:
+                still_failed.append(idx)
+        failed_global = still_failed
+
+    print(f"[DEBUG][BATCH-DEL] Total rows apagadas (batch+fallback): {deleted_total}")
+    return {"deleted": deleted_total, "failed": sorted(set(failed_global), reverse=True)}
 
 # ===== Função principal =====
 def keep_last_24_months(mode="block"):
@@ -408,11 +385,10 @@ def keep_last_24_months(mode="block"):
         cutoff = cutoff_datetime(CUTOFF_MODE)
 
         if mode == "block":
-            # *** Novo fluxo: evitar dataBodyRange/range ***
             # 1) Ordenar ascendente pela coluna de data (0-based)
             table_sort_by_column(drive_id, item_id, DST_TABLE, session_id, date_col_idx, ascending=True)
 
-            # 2) Varre as primeiras páginas de rows (na ordem atual da tabela) até encontrar a primeira ≥ cutoff
+            # 2) Varre paginado até ao primeiro >= cutoff; acumula índices contíguos do topo
             indices_to_delete = []
             for r in list_table_rows_paged(drive_id, item_id, DST_TABLE, session_id, top=DEFAULT_TOP):
                 idx = r.get("index")
@@ -426,16 +402,16 @@ def keep_last_24_months(mode="block"):
                     break
                 indices_to_delete.append(int(idx))
 
-                # Se já cobriu uma página inteira e continua < cutoff, segue; a função paginada continuará
-                # A paragem ocorrerá naturalmente ao chegar à primeira >= cutoff
-
             if not indices_to_delete:
                 print("Nenhuma linha para remover (já só tens últimos 24 meses).")
                 return
 
-            # 3) Apagar os índices contíguos do topo em lotes descendentes
-            deleted = delete_rows_in_batches(drive_id, item_id, DST_TABLE, session_id, indices_to_delete, batch_size=BATCH_SIZE)
-            print(f"[BLOCK→BATCH] Removidas {deleted} linhas anteriores a {cutoff.date()} em lotes descendentes (até {BATCH_SIZE} por batch).")
+            # 3) Apagar índices contíguos do topo via $batch (ItemAt) + fallback sequencial
+            res = delete_table_rows_by_index_batch(
+                drive_id, item_id, DST_TABLE, session_id, indices_to_delete,
+                max_batch_size=BATCH_SIZE, max_retries=3, fallback_sequential=True
+            )
+            print(f"[BLOCK→BATCH] Removidas {res['deleted']} linhas anteriores a {cutoff.date()} (falharam {len(res['failed'])}).")
 
         elif mode == "batch":
             # 1) Ler todas as linhas (sem ordenar) e calcular índices a apagar
@@ -454,8 +430,11 @@ def keep_last_24_months(mode="block"):
             if not indices_to_delete:
                 print("Nenhuma linha antiga encontrada. Nada a apagar.")
                 return
-            deleted = delete_rows_in_batches(drive_id, item_id, DST_TABLE, session_id, indices_to_delete, batch_size=BATCH_SIZE)
-            print(f"[BATCH] Removidas {deleted} linhas anteriores a {cutoff.date()} em lotes descendentes (até {BATCH_SIZE} por batch).")
+            res = delete_table_rows_by_index_batch(
+                drive_id, item_id, DST_TABLE, session_id, indices_to_delete,
+                max_batch_size=BATCH_SIZE, max_retries=3, fallback_sequential=True
+            )
+            print(f"[BATCH] Removidas {res['deleted']} linhas anteriores a {cutoff.date()} (falharam {len(res['failed'])}).")
         else:
             raise ValueError(f"MODE inválido: {mode}")
     finally:
