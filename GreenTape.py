@@ -76,7 +76,6 @@ def get_table_headers(drive_id, item_id, table_name, session_id):
     rng = r.json()
     values = rng.get("values", [[]])
     headers = [str(x) for x in (values[0] if values and values[0] else [])]
-    print(f"!!!!!!HEADERS: {headers} !!!!!!!!!")
     return headers
 
 def get_table_headers_safe(drive_id, item_id, table_name, session_id):
@@ -158,15 +157,84 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
 # ===== Outras helpers específicas do Excel (mantidas) =====
 def get_table_databody_range(drive_id, item_id, table_name, session_id):
     """
-    Retorna o DataBodyRange (sem header) com address e values já na ordem atual da folha.
+    Tenta obter o DataBodyRange (sem header). 
+    Fallback: usa /range, remove a 1ª linha (headers) e ajusta o address para começar uma linha abaixo.
+    Retorna um dicionário com chaves: address, values, rowCount, columnCount.
     """
     h = workbook_headers(session_id)
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange",
-        headers=h
-    )
-    r.raise_for_status()
-    return r.json()  # address, values, rowCount, columnCount, etc.
+
+    # 1) tentativa oficial: dataBodyRange
+    url_body = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
+    r = requests.get(url_body, headers=h)
+    if r.ok:
+        return r.json()
+
+    # --- Fallback se dataBodyRange falhar ---
+    print("[DEBUG][dataBodyRange] Falhou com STATUS:", r.status_code)
+    try:
+        print("[DEBUG][dataBodyRange] JSON:", r.json())
+    except Exception:
+        print("[DEBUG][dataBodyRange] TEXT:", r.text)
+
+    # 2) /range (inclui headers na 1ª linha)
+    url_rng = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
+    rr = requests.get(url_rng, headers=h)
+    if not rr.ok:
+        print("[DEBUG][range] Falhou também. STATUS:", rr.status_code)
+        try: print("[DEBUG][range] JSON:", rr.json())
+        except Exception: print("[DEBUG][range] TEXT:", rr.text)
+        rr.raise_for_status()
+
+    rng = rr.json()
+    values_all = rng.get("values", [])
+    address_all = rng.get("address")  # ex.: "Folha1!A1:Z100"
+
+    # Se não há valores, devolve corpo vazio coerente
+    if not values_all or not isinstance(values_all, list):
+        return {"address": address_all, "values": [], "rowCount": 0, "columnCount": 0}
+
+    # Remover a 1ª linha (headers) para obter o corpo
+    values_body = values_all[1:] if len(values_all) > 1 else []
+
+    # Ajustar o address A1 para começar 1 linha abaixo
+    # address_all = "Folha!A1:Z100" -> corpo = "Folha!A2:Z100" (se existir corpo)
+    if address_all and "!" in address_all and ":" in address_all and values_body:
+        sheet, cells = address_all.split("!", 1)
+        start, end = cells.split(":", 1)
+
+        def split_col_row(a1):
+            i = 0
+            while i < len(a1) and a1[i].isalpha():
+                i += 1
+            col = a1[:i]
+            row = int(a1[i:]) if i < len(a1) else 1
+            return col, row
+
+        s_col, s_row = split_col_row(start)
+        e_col, e_row = split_col_row(end)
+
+        # Sobe o início em +1 (pula headers)
+        s_row_adj = s_row + 1
+        # Se a tabela tinha só headers, values_body=[] e não entramos aqui
+
+        address_body = f"{sheet}!{s_col}{s_row_adj}:{e_col}{e_row}"
+    else:
+        # Sem address interpretável, devolve o original
+        address_body = address_all
+
+    # columnCount = nº de colunas do header (se existir), senão do 1º row do corpo
+    col_count = 0
+    if values_all and isinstance(values_all[0], list):
+        col_count = len(values_all[0])
+    elif values_body and isinstance(values_body[0], list):
+        col_count = len(values_body[0])
+
+    return {
+        "address": address_body,
+        "values": values_body,
+        "rowCount": len(values_body),
+        "columnCount": col_count
+    }
 
 def table_sort_by_column(drive_id, item_id, table_name, session_id, column_index_zero_based, ascending=True):
     """
