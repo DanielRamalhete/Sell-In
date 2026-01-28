@@ -76,6 +76,7 @@ def get_table_headers(drive_id, item_id, table_name, session_id):
     rng = r.json()
     values = rng.get("values", [[]])
     headers = [str(x) for x in (values[0] if values and values[0] else [])]
+    print(f"!!!!!!HEADERS: {headers} !!!!!!!!!")
     return headers
 
 def get_table_headers_safe(drive_id, item_id, table_name, session_id):
