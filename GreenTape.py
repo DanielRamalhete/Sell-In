@@ -323,6 +323,8 @@ def keep_last_24_months(mode="block"):
             del_end   = start_row + delete_count - 1
             del_addr  = f"{start_col}{del_start}:{end_col}{del_end}"
 
+            print(f"del_start: {del_start} - del_end: {del_end} - del_addr: {del_addr}")
+
             # 5) Apagar o bloco de uma só vez (shift Up)
             delete_range_on_sheet(drive_id, item_id, sheet_name, del_addr, session_id)
 
