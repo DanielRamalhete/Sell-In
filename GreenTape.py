@@ -66,6 +66,7 @@ def get_table_header_and_rows(drive_id, item_id, table_name, session_id):
     Retorna dict: {"headers": [...], "rows": [[...], ...]}
     """
     h = workbook_headers(session_id)
+    print(f"drive_id: {drive_id} - item_id: {item_id} - table_name: {table_name} - session_id: {session_id}")
     r = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range",
         headers=h
