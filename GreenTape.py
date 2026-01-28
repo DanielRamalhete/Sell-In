@@ -15,7 +15,7 @@ DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/GreenTape.xlsx"
 DST_TABLE = "Historico"
 DATE_COLUMN = "Data Entrega"
 
-# Estratégia: "block" (sort + delete bloco) ou "batch" (deletes em lotes descendentes)
+# Estratégia: "block" (sort + delete contíguo) ou "batch" (deletes em lotes descendentes)
 MODE = os.getenv("MODE", "block")  # "block" | "batch"
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "20"))
 
@@ -154,22 +154,22 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
             yield row
         skip += top
 
-# ===== Outras helpers específicas do Excel (mantidas) =====
+# ===== Outras helpers específicas do Excel =====
 def get_table_databody_range(drive_id, item_id, table_name, session_id):
     """
-    Tenta obter o DataBodyRange (sem header). 
+    Tenta obter o DataBodyRange (sem header).
     Fallback: usa /range, remove a 1ª linha (headers) e ajusta o address para começar uma linha abaixo.
     Retorna um dicionário com chaves: address, values, rowCount, columnCount.
     """
     h = workbook_headers(session_id)
 
-    # 1) tentativa oficial: dataBodyRange
+    # 1) dataBodyRange
     url_body = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
     r = requests.get(url_body, headers=h)
     if r.ok:
         return r.json()
 
-    # --- Fallback se dataBodyRange falhar ---
+    # --- Fallback ---
     print("[DEBUG][dataBodyRange] Falhou com STATUS:", r.status_code)
     try:
         print("[DEBUG][dataBodyRange] JSON:", r.json())
@@ -189,15 +189,12 @@ def get_table_databody_range(drive_id, item_id, table_name, session_id):
     values_all = rng.get("values", [])
     address_all = rng.get("address")  # ex.: "Folha1!A1:Z100"
 
-    # Se não há valores, devolve corpo vazio coerente
     if not values_all or not isinstance(values_all, list):
         return {"address": address_all, "values": [], "rowCount": 0, "columnCount": 0}
 
-    # Remover a 1ª linha (headers) para obter o corpo
     values_body = values_all[1:] if len(values_all) > 1 else []
 
-    # Ajustar o address A1 para começar 1 linha abaixo
-    # address_all = "Folha!A1:Z100" -> corpo = "Folha!A2:Z100" (se existir corpo)
+    # Ajustar address (se possível)
     if address_all and "!" in address_all and ":" in address_all and values_body:
         sheet, cells = address_all.split("!", 1)
         start, end = cells.split(":", 1)
@@ -212,17 +209,10 @@ def get_table_databody_range(drive_id, item_id, table_name, session_id):
 
         s_col, s_row = split_col_row(start)
         e_col, e_row = split_col_row(end)
-
-        # Sobe o início em +1 (pula headers)
-        s_row_adj = s_row + 1
-        # Se a tabela tinha só headers, values_body=[] e não entramos aqui
-
-        address_body = f"{sheet}!{s_col}{s_row_adj}:{e_col}{e_row}"
+        address_body = f"{sheet}!{s_col}{s_row+1}:{e_col}{e_row}"
     else:
-        # Sem address interpretável, devolve o original
         address_body = address_all
 
-    # columnCount = nº de colunas do header (se existir), senão do 1º row do corpo
     col_count = 0
     if values_all and isinstance(values_all[0], list):
         col_count = len(values_all[0])
@@ -243,12 +233,7 @@ def table_sort_by_column(drive_id, item_id, table_name, session_id, column_index
     """
     h = workbook_headers(session_id)
     body = {
-        "fields": [
-            {
-                "key": column_index_zero_based,
-                "ascending": ascending
-            }
-        ],
+        "fields": [{"key": column_index_zero_based, "ascending": ascending}],
         "matchCase": False
     }
     r = requests.post(
@@ -299,7 +284,7 @@ def _split_col_row(a1):
         i += 1
     return a1[:i], int(a1[i:]) if i < len(a1) else 1
 
-# ---- Utilidades de data (repôr) ----
+# ---- Utilidades de data ----
 def months_ago(dt: datetime, months: int) -> datetime:
     """
     Subtrai 'months' meses de dt preservando o dia quando possível.
@@ -334,7 +319,7 @@ def parse_date_any(value):
     """
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return None
-    # Excel serial date (dias desde 1899-12-30; cuidado com leap bug de 1900)
+    # Excel serial date (dias desde 1899-12-30)
     if isinstance(value, (int, float)):
         try:
             excel_epoch = datetime(1899, 12, 30, tzinfo=timezone.utc)
@@ -376,9 +361,7 @@ def batch_delete_rows(drive_id, item_id, table_name, session_id, indices_chunk):
             "id": str(j),
             "method": "DELETE",
             "url": f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/{idx}",
-            "headers": {
-                "workbook-session-id": session_id
-            }
+            "headers": {"workbook-session-id": session_id}
         }
         requests_body.append(sub)
     body = {"requests": requests_body}
@@ -425,40 +408,34 @@ def keep_last_24_months(mode="block"):
         cutoff = cutoff_datetime(CUTOFF_MODE)
 
         if mode == "block":
+            # *** Novo fluxo: evitar dataBodyRange/range ***
             # 1) Ordenar ascendente pela coluna de data (0-based)
             table_sort_by_column(drive_id, item_id, DST_TABLE, session_id, date_col_idx, ascending=True)
-            # 2) Obter DataBodyRange (sem header), já ordenado
-            body = get_table_databody_range(drive_id, item_id, DST_TABLE, session_id)
-            values = body.get("values", [])
-            if not values:
-                print("Sem linhas no corpo da tabela.")
-                return
-            # 3) Contar quantas linhas iniciais estão < cutoff (contíguas no topo)
-            delete_count = 0
-            for row in values:
-                val = row[date_col_idx] if date_col_idx < len(row) else None
-                dt = parse_date_any(val)
-                # Se a data não é parsável, paramos para não apagar indevidamente
+
+            # 2) Varre as primeiras páginas de rows (na ordem atual da tabela) até encontrar a primeira ≥ cutoff
+            indices_to_delete = []
+            for r in list_table_rows_paged(drive_id, item_id, DST_TABLE, session_id, top=DEFAULT_TOP):
+                idx = r.get("index")
+                vals = (r.get("values", [[]])[0] or [])
+                if idx is None or len(vals) <= date_col_idx:
+                    # Linha mal formada; interrompe para segurança
+                    break
+                dt = parse_date_any(vals[date_col_idx])
+                # Parar ao primeiro não parsável ou >= cutoff para manter contiguidade
                 if dt is None or dt >= cutoff:
                     break
-                delete_count += 1
-            if delete_count == 0:
+                indices_to_delete.append(int(idx))
+
+                # Se já cobriu uma página inteira e continua < cutoff, segue; a função paginada continuará
+                # A paragem ocorrerá naturalmente ao chegar à primeira >= cutoff
+
+            if not indices_to_delete:
                 print("Nenhuma linha para remover (já só tens últimos 24 meses).")
                 return
-            # 4) Construir address A1 do bloco a apagar
-            address = body.get("address")  # ex.: "Folha1!A2:Z100"
-            sheet_name, start_a1, end_a1 = _parse_a1_address(address)
-            if not sheet_name:
-                raise RuntimeError(f"Endereço inesperado: {address}")
-            start_col, start_row = _split_col_row(start_a1)
-            end_col, _end_row = _split_col_row(end_a1)
-            del_start = start_row
-            del_end = start_row + delete_count - 1
-            del_addr = f"{start_col}{del_start}:{end_col}{del_end}"
-            print(f"del_start: {del_start} - del_end: {del_end} - del_addr: {del_addr}")
-            # 5) Apagar o bloco de uma só vez (shift Up)
-            delete_range_on_sheet(drive_id, item_id, sheet_name, del_addr, session_id)
-            print(f"[BLOCK] Removidas {delete_count} linhas anteriores a {cutoff.date()} (1 operação).")
+
+            # 3) Apagar os índices contíguos do topo em lotes descendentes
+            deleted = delete_rows_in_batches(drive_id, item_id, DST_TABLE, session_id, indices_to_delete, batch_size=BATCH_SIZE)
+            print(f"[BLOCK→BATCH] Removidas {deleted} linhas anteriores a {cutoff.date()} em lotes descendentes (até {BATCH_SIZE} por batch).")
 
         elif mode == "batch":
             # 1) Ler todas as linhas (sem ordenar) e calcular índices a apagar
