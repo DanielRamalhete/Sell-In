@@ -43,31 +43,21 @@ def workbook_headers(session_id: str) -> dict:
 
 # ========================== GRAPH BASICS ==========================
 def get_site_id():
-    r = requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers)
-    r.raise_for_status()
+    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
+
+def get_drive_id(site_id):
+    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
+
+def get_item_id(drive_id, path):
+    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
+
+def create_session(drive_id, item_id):
+    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
+                      headers=base_headers, data=json.dumps({"persistChanges": True}))
     return r.json()["id"]
 
-def get_drive_id(site_id: str):
-    r = requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers)
-    r.raise_for_status()
-    return r.json()["id"]
-
-def get_item_id(drive_id: str, path: str):
-    r = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers)
-    r.raise_for_status()
-    return r.json()["id"]
-
-def create_session(drive_id: str, item_id: str):
-    r = requests.post(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
-        headers=base_headers,
-        data=json.dumps({"persistChanges": True}),
-    )
-    r.raise_for_status()
-    return r.json()["id"]
-
-def close_session(drive_id: str, item_id: str, session_id: str):
-    h = workbook_headers(session_id)
+def close_session(drive_id, item_id, session_id):
+    h = dict(base_headers); h["workbook-session-id"] = session_id
     requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
 
 
