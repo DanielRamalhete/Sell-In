@@ -312,4 +312,3 @@ def keep_last_24_months():
 
 if __name__ == "__main__":
     keep_last_24_months()
-``
