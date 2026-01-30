@@ -1,6 +1,7 @@
 import os, json, requests, msal
 from datetime import datetime, timedelta, timezone
 import calendar
+import string
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -15,7 +16,6 @@ DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/GreenTape.xlsx"
 DST_TABLE = "Historico"
 DATE_COLUMN = "Data Entrega"
 
-MODE = os.getenv("MODE", "block")  # apenas para manter compatibilidade
 DEFAULT_TOP = int(os.getenv("GRAPH_ROWS_TOP") or "5000")
 IMPORT_CHUNK_SIZE = 2000
 IMPORT_MAX_RETRIES = 3
@@ -80,7 +80,7 @@ def workbook_headers(session_id):
     return h
 
 
-# ---- Helpers para headers (como no Implementacoes.py) ----
+# ---- Headers seguros ----
 def get_table_headers_safe(drive_id, item_id, table_name, session_id):
     h = workbook_headers(session_id)
 
@@ -109,7 +109,7 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
             print("[DEBUG] fallback columns →", names)
             return names
 
-    # 3) range (primeira linha)
+    # 3) range → primeira linha
     rr = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range",
         headers=h
@@ -123,7 +123,7 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
     raise RuntimeError("Não foi possível obter headers da tabela.")
 
 
-# ---- Ler rows paginadas ----
+# ---- Leitura paginada ----
 def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=DEFAULT_TOP):
     h = workbook_headers(session_id)
     base_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
@@ -133,7 +133,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=DEFAULT
         url = f"{base_url}?$top={top}&$skip={skip}"
         r = requests.get(url, headers=h)
         if not r.ok:
-            print("[DEBUG][paged] status:", r.status_code)
+            print("[DEBUG][paged] ERROR:", r.status_code)
             try: print(r.json())
             except: print(r.text)
             r.raise_for_status()
@@ -142,32 +142,29 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=DEFAULT
         if not rows:
             break
 
-        print(f"[DEBUG] rows page: skip={skip} count={len(rows)}")
+        print(f"[DEBUG] rows page skip={skip} count={len(rows)}")
         for row in rows:
             yield row
 
         skip += top
 
 
-# ---- Utilidades data ----
+# ---- Datas ----
 def months_ago(dt: datetime, months: int) -> datetime:
     year = dt.year
     month = dt.month - months
     while month <= 0:
         month += 12
         year -= 1
-    day = dt.day
-    max_day = calendar.monthrange(year, month)[1]
-    if day > max_day:
-        day = max_day
+    day = min(dt.day, calendar.monthrange(year, month)[1])
     return datetime(year, month, day, dt.hour, dt.minute, dt.second, dt.microsecond, tzinfo=dt.tzinfo)
 
 
 def cutoff_datetime(mode="rolling"):
     now_utc = datetime.now(timezone.utc) - timedelta(days=1)
     if mode == "fullmonth":
-        start_month = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        return months_ago(start_month, 24)
+        start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return months_ago(start, 24)
     return months_ago(now_utc, 24)
 
 
@@ -190,7 +187,7 @@ def parse_date_any(v):
     return None
 
 
-# ---- Operações rápidas: CLEAR + INSERT ----
+# ---- CLEAR ----
 def clear_table_body(drive_id, item_id, table_name, session_id):
     h = workbook_headers(session_id)
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange/clear"
@@ -202,8 +199,10 @@ def clear_table_body(drive_id, item_id, table_name, session_id):
         r.raise_for_status()
 
 
+# ---- INSERT em chunks (método do Implementacoes) ----
 def add_rows_chunked(drive_id, item_id, table_name, session_id, rows_2d,
-                     chunk_size=IMPORT_CHUNK_SIZE, max_retries=IMPORT_MAX_RETRIES):
+                     chunk_size=2000, max_retries=3):
+
     if not rows_2d:
         return 0
 
@@ -220,7 +219,7 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows_2d,
 
         body = {"index": None, "values": chunk}
 
-        print(f"[DEBUG][ADD] POST {url} rows={len(chunk)} start={start}")
+        print(f"[DEBUG][ADD] rows={len(chunk)} start={start}")
         r = requests.post(url, headers=h, data=json.dumps(body))
 
         if r.status_code == 429:
@@ -237,8 +236,7 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows_2d,
 
             print("[DEBUG][ADD] ERROR:", err)
 
-            if "Payload" in str(err).lower():
-                # dividir chunk ao meio
+            if "Payload" in str(err):
                 mid = len(chunk) // 2
                 print("[DEBUG][ADD] payload grande → dividir chunk")
                 add_rows_chunked(drive_id, item_id, table_name, session_id, chunk[:mid])
@@ -246,7 +244,6 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows_2d,
                 return total + len(chunk)
 
             if max_retries > 0:
-                print("[DEBUG][ADD] retry…")
                 max_retries -= 1
                 continue
 
@@ -256,6 +253,42 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows_2d,
         start = end
 
     return total
+
+
+# ---- RESIZE final para remover linhas vazias ----
+def resize_table(drive_id, item_id, table_name, session_id, sheet_name, headers, row_count):
+    """
+    Redimensiona a tabela para caber exatamente o header + rows inseridas.
+    Remove completamente as linhas vazias criadas pelo CLEAR.
+    """
+
+    col_start = "A"
+    
+    # Converte número de colunas para letras (A, B, C ... Z, AA, AB, ...)
+    def excel_col(n):
+        result = ""
+        while n > 0:
+            n, r = divmod(n - 1, 26)
+            result = chr(65 + r) + result
+        return result
+
+    col_end = excel_col(len(headers))  # última coluna (ex: T)
+
+    # Header = linha 1; corpo = linhas 2..(1+row_count)
+    last_row = 1 + row_count
+
+    range_address = f"'{sheet_name}'!{col_start}1:{col_end}{last_row}"
+    print("[INFO] RESIZE →", range_address)
+
+    h = workbook_headers(session_id)
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/resize"
+
+    r = requests.post(url, headers=h, data=json.dumps({"range": range_address}))
+    if not r.ok:
+        print("[DEBUG][RESIZE] Falhou")
+        try: print(r.json())
+        except: print(r.text)
+        r.raise_for_status()
 
 
 # ---- FUNÇÃO PRINCIPAL ----
@@ -274,7 +307,7 @@ def keep_last_24_months(mode="block"):
         cutoff = cutoff_datetime(CUTOFF_MODE)
         print("[INFO] Cutoff:", cutoff.date())
 
-        # 1) ORDENAR por Data
+        # 1) ORDENAR a tabela
         print("[INFO] A ordenar tabela…")
         h = workbook_headers(session_id)
         sort_body = {
@@ -283,12 +316,11 @@ def keep_last_24_months(mode="block"):
         }
         r = requests.post(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{DST_TABLE}/sort/apply",
-            headers=h,
-            data=json.dumps(sort_body)
+            headers=h, data=json.dumps(sort_body)
         )
         r.raise_for_status()
 
-        # 2) LER TODAS AS LINHAS → rows_to_keep
+        # 2) LER TODAS AS LINHAS → filtrar as que queremos manter
         print("[INFO] A ler tabela paginada…")
         rows_to_keep = []
 
@@ -296,20 +328,22 @@ def keep_last_24_months(mode="block"):
             vals = (r.get("values", [[]])[0] or [])
             if len(vals) <= date_idx:
                 continue
+
             dt = parse_date_any(vals[date_idx])
             if dt is None:
                 continue
+
             if dt >= cutoff:
                 rows_to_keep.append(vals)
 
         print(f"[INFO] Linhas a manter: {len(rows_to_keep)}")
 
-        # 3) CLEAR DO CORPO DA TABELA (ULTRA RÁPIDO)
+        # 3) CLEAR TOTAL (super rápido)
         print("[INFO] CLEAR total do corpo da tabela…")
         clear_table_body(drive_id, item_id, DST_TABLE, session_id)
 
-        # 4) INSERÇÃO dos dados filtrados
-        print("[INFO] Inserir linhas…")
+        # 4) INSERIR apenas as linhas boas
+        print("[INFO] Inserir linhas filtradas…")
         inserted = add_rows_chunked(
             drive_id, item_id, DST_TABLE, session_id,
             rows_to_keep,
@@ -318,10 +352,15 @@ def keep_last_24_months(mode="block"):
 
         print(f"[INFO] Inseridas {inserted} linhas.")
 
+        # 5) RESIZE final para remover linhas vazias restantes
+        print("[INFO] Redimensionar tabela…")
+        sheet_name = DST_TABLE  # Por norma a tabela tem o mesmo nome da sheet; se não tiver diz-me!
+        resize_table(drive_id, item_id, DST_TABLE, session_id, sheet_name, headers, inserted)
+
     finally:
         close_session(drive_id, item_id, session_id)
 
 
 # ---- ENTRYPOINT ----
 if __name__ == "__main__":
-    keep_last_24_months(mode=MODE)
+    keep_last_24_months()
