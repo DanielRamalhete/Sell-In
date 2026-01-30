@@ -13,21 +13,20 @@ SITE_PATH = os.getenv("SITE_PATH")
 
 SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/GreenTape.xlsx"
 SRC_TABLE = "Historico"
-SRC_SHEET = "LstPrd"         # <-- tabela original
+SRC_SHEET = "LstPrd"
 
-DST_SHEET = "Historico24M"   # <-- nova sheet (será criada se não existir)
-DST_TABLE = "Historico24M"   # <-- nova tabela com dados filtrados
+DST_SHEET = "Historico24M"    # Sheet nova
+DST_TABLE = "Historico24M"    # Nome que queremos para a nova tabela
 
 DATE_COLUMN = "Data Entrega"
 
 DEFAULT_TOP = 5000
 IMPORT_CHUNK_SIZE = 2000
-
 CUTOFF_MODE = "rolling"
 # ==========================
 
 
-# ------- AUTENTICAÇÃO -------
+# ================== AUTENTICAÇÃO ==================
 app = msal.ConfidentialClientApplication(
     CLIENT_ID,
     authority=f"https://login.microsoftonline.com/{TENANT_ID}",
@@ -37,7 +36,7 @@ token = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.defau
 base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-# ------- HELPERS -------
+# ================== HELPERS ==================
 def workbook_headers(session_id):
     h = dict(base_headers)
     h["workbook-session-id"] = session_id
@@ -71,48 +70,36 @@ def create_session(drive_id, item_id):
 def close_session(drive_id, item_id, session_id):
     h = workbook_headers(session_id)
     requests.post(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession",
+        headers=h
     )
 
 
-# ------- OBTÉM HEADERS -------
+# ================== HEADERS ==================
 def get_table_headers_safe(drive_id, item_id, table_name, session_id):
     h = workbook_headers(session_id)
 
-    # 1) headerRowRange
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange",
-        headers=h
-    )
+    r = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange", headers=h)
     if r.ok:
         vals = r.json().get("values", [[]])
         if vals and vals[0]:
             return [str(x) for x in vals[0]]
 
-    # 2) columns
-    rc = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/columns",
-        headers=h
-    )
+    rc = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/columns", headers=h)
     if rc.ok:
-        names = [c.get("name") for c in rc.json().get("value", [])]
-        if names:
-            return names
+        cols = rc.json().get("value", [])
+        return [c["name"] for c in cols]
 
-    # 3) range
-    rr = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range",
-        headers=h
-    )
+    rr = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range", headers=h)
     if rr.ok:
         vals = rr.json().get("values", [[]])
         if vals and vals[0]:
             return [str(x) for x in vals[0]]
 
-    raise RuntimeError("não consegui obter headers")
+    raise RuntimeError("Não consegui obter headers.")
 
 
-# ------- LEITURA PAGINADA -------
+# ================== LEITURA PAGINADA ==================
 def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=DEFAULT_TOP):
     h = workbook_headers(session_id)
     base = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows"
@@ -129,7 +116,7 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=DEFAULT
         skip += top
 
 
-# ------- DATAS -------
+# ================== DATAS ==================
 def months_ago(dt, months):
     year = dt.year
     month = dt.month - months
@@ -153,58 +140,69 @@ def parse_date_any(v):
         excel_epoch = datetime(1899, 12, 30, tzinfo=timezone.utc)
         return excel_epoch + timedelta(days=float(v))
     if isinstance(v, str):
-        s = v.strip()
         for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
             try:
-                return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+                return datetime.strptime(v.strip(), fmt).replace(tzinfo=timezone.utc)
             except:
                 pass
     return None
 
 
-# ------- CRIA SHEET SE NÃO EXISTIR -------
+# ================== SHEET ==================
 def ensure_sheet_exists(drive_id, item_id, session_id, sheet_name):
     h = workbook_headers(session_id)
 
-    r = requests.get(
-        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets",
-        headers=h
-    )
+    r = requests.get(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets", headers=h)
     r.raise_for_status()
     sheets = r.json().get("value", [])
 
+    # procurar sheet existente
     for s in sheets:
-        if s.get("name").lower() == sheet_name.lower():
+        if s["name"].lower() == sheet_name.lower():
             return s["name"]
 
-    # Criar sheet nova
+    # criar sheet
     r = requests.post(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/add",
-        headers=h, data=json.dumps({"name": sheet_name})
+        headers=h,
+        data=json.dumps({"name": sheet_name})
     )
     r.raise_for_status()
     return sheet_name
 
 
-# ------- CRIA NOVA TABELA -------
-def create_new_table(drive_id, item_id, session_id, sheet_name, headers):
+# ================== TABELA NOVA ==================
+def create_and_get_table_name(drive_id, item_id, session_id, sheet_name, headers):
     h = workbook_headers(session_id)
 
+    # range da header row
     col_start = "A"
-    col_end = chr(ord("A") + len(headers) - 1)    # assume começa em A
-
+    col_end = chr(ord("A") + len(headers) - 1)
     address = f"'{sheet_name}'!{col_start}1:{col_end}1"
 
-    body = {"address": address, "hasHeaders": True}
-
+    # criar tabela (nome automático)
     r = requests.post(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{sheet_name}/tables/add",
-        headers=h, data=json.dumps(body)
+        headers=h,
+        data=json.dumps({"address": address, "hasHeaders": True})
     )
     r.raise_for_status()
 
+    # descobrir nome real da tabela criada
+    r2 = requests.get(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{sheet_name}/tables",
+        headers=h
+    )
+    r2.raise_for_status()
+    tables = r2.json().get("value", [])
 
-# ------- INSERIR ROWS -------
+    # a tabela recém criada é a última
+    real_name = tables[-1]["name"]
+
+    return real_name
+
+
+# ================== INSERIR DADOS ==================
 def add_rows_chunked(drive_id, item_id, table_name, session_id, rows, chunk=2000):
     if not rows:
         return 0
@@ -218,13 +216,14 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows, chunk=2000
 
     while start < n:
         end = min(start + chunk, n)
-        data = {"index": None, "values": rows[start:end]}
+        body = {"index": None, "values": rows[start:end]}
+        r = requests.post(url, headers=h, data=json.dumps(body))
 
-        r = requests.post(url, headers=h, data=json.dumps(data))
         if r.status_code == 429:
             import time
             time.sleep(int(r.headers.get("Retry-After", "5")))
             continue
+
         r.raise_for_status()
 
         total += end - start
@@ -233,8 +232,9 @@ def add_rows_chunked(drive_id, item_id, table_name, session_id, rows, chunk=2000
     return total
 
 
-# ================== FUNÇÃO PRINCIPAL ==================
+# ================== MAIN ==================
 def keep_last_24_months():
+
     site_id = get_site_id()
     drive_id = get_drive_id(site_id)
     item_id = get_item_id(drive_id, SRC_FILE_PATH)
@@ -242,39 +242,37 @@ def keep_last_24_months():
 
     try:
         headers = get_table_headers_safe(drive_id, item_id, SRC_TABLE, session_id)
-
-        if DATE_COLUMN not in headers:
-            raise Exception("Coluna de data não encontrada")
         date_idx = headers.index(DATE_COLUMN)
 
         cutoff = cutoff_datetime(CUTOFF_MODE)
         print("[INFO] Cutoff =", cutoff.date())
 
-        # Ler e filtrar dados
-        rows_to_keep = []
-
+        # LER + filtrar
+        rows_filtered = []
         for r in list_table_rows_paged(drive_id, item_id, SRC_TABLE, session_id):
             vals = (r.get("values", [[]])[0] or [])
             dt = parse_date_any(vals[date_idx])
             if dt and dt >= cutoff:
-                rows_to_keep.append(vals)
+                rows_filtered.append(vals)
 
-        print("[INFO] Linhas finais =", len(rows_to_keep))
+        print("[INFO] Linhas selecionadas:", len(rows_filtered))
 
-        # Garantir que a sheet de destino existe
-        real_sheet = ensure_sheet_exists(drive_id, item_id, session_id, DST_SHEET)
+        # garantir sheet destino
+        sheet_real = ensure_sheet_exists(drive_id, item_id, session_id, DST_SHEET)
 
-        # Criar tabela nova
-        create_new_table(drive_id, item_id, session_id, real_sheet, headers)
+        # criar tabela nova + obter nome real
+        real_dst_table = create_and_get_table_name(drive_id, item_id, session_id, sheet_real, headers)
+        print("[INFO] Tabela criada →", real_dst_table)
 
-        # Inserir linhas
-        inserted = add_rows_chunked(drive_id, item_id, DST_TABLE, session_id, rows_to_keep)
-        print("[INFO] Inseridas =", inserted)
+        # inserir linhas
+        inserted = add_rows_chunked(drive_id, item_id, real_dst_table, session_id, rows_filtered)
+        print(f"[INFO] Inseridas {inserted} linhas na nova tabela.")
 
     finally:
         close_session(drive_id, item_id, session_id)
 
 
-# -------------------
+
+# ================== RUN ==================
 if __name__ == "__main__":
     keep_last_24_months()
