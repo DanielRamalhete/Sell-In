@@ -13,7 +13,7 @@ SITE_PATH = os.getenv("SITE_PATH")
 
 DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/GreenTape.xlsx"
 DST_TABLE = "Historico"
-DST_SHEET = "LstOrd"   # <- *** A TUA FOLHA ***
+DST_SHEET = "LstPrd"   # <- *** A TUA FOLHA ***
 
 DATE_COLUMN = "Data Entrega"
 
