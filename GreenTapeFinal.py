@@ -4,6 +4,7 @@ import pandas as pd
 import unicodedata
 import re
 import time
+import math
 
 # ========================== GRAPH BASE =======================
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -129,19 +130,14 @@ def build_merged_dataframe():
         df_bst = read_table(ast_drive, ast_item, sess_ast, BST_TABLE)
         df_cst = read_table(cst_drive, cst_item, sess_cst, CST_TABLE)
 
-        df = df_ast.merge(
-            df_bst,
-            how="left",
-            left_on="Refª Visita",
-            right_on="Refª"
-        ).merge(
-            df_cst,
-            how="left",
-            left_on="Ref. Farmácia",
-            right_on="Ref"
+        df = (
+            df_ast
+            .merge(df_bst, how="left", left_on="Refª Visita", right_on="Refª")
+            .merge(df_cst, how="left", left_on="Ref. Farmácia", right_on="Ref")
         )
 
         return df
+
     finally:
         close_session(ast_drive, ast_item, sess_ast)
         close_session(cst_drive, cst_item, sess_cst)
@@ -156,9 +152,8 @@ def _norm(s):
 def build_dataframe_for_dst(df):
     rename = {}
     for c in df.columns:
-        n = _norm(c)
         for d in DST_COLUMNS:
-            if n == _norm(d):
+            if _norm(c) == _norm(d):
                 rename[c] = d
                 break
 
@@ -166,11 +161,14 @@ def build_dataframe_for_dst(df):
     df = df.reindex(columns=DST_COLUMNS)
     return df
 
-# ========================== SANITIZAÇÃO JSON ✅ ==============
-def sanitize_dataframe_for_json(df):
-    df = df.replace([float("inf"), float("-inf")], None)
-    df = df.where(pd.notna(df), None)
-    return df
+# ========================== JSON SAFE ✅ ====================
+def json_safe_value(v):
+    if v is None:
+        return None
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+    return v
 
 # ========================== WRITE (ROWS/ADD) =================
 def clear_and_write_table(drive_id, item_id, table, df):
@@ -192,8 +190,10 @@ def clear_and_write_table(drive_id, item_id, table, df):
             json={"applyTo": "all"}
         ).raise_for_status()
 
-        # Add rows (chunks)
-        rows = df.values.tolist()
+        # Rows (JSON-safe)
+        raw_rows = df.values.tolist()
+        rows = [[json_safe_value(v) for v in row] for row in raw_rows]
+
         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/rows/add"
 
         for i in range(0, len(rows), 1000):
@@ -211,13 +211,12 @@ def clear_and_write_table(drive_id, item_id, table, df):
 def build_and_write_to_dst():
     df_merged = build_merged_dataframe()
     df_dst = build_dataframe_for_dst(df_merged)
-    df_dst = sanitize_dataframe_for_json(df_dst)
 
     site_id = get_site_id()
     dst_drive, dst_item = get_ids_for_path(site_id, DST_FILE_PATH)
 
     clear_and_write_table(dst_drive, dst_item, DST_TABLE, df_dst)
-    print(f"✅ Concluído: {len(df_dst)} linhas gravadas em {DST_TABLE}")
+    print(f"✅ Concluído: {len(df_dst)} linhas gravadas em '{DST_TABLE}'")
 
 # ========================== ENTRYPOINT ======================
 if __name__ == "__main__":
