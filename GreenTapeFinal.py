@@ -7,15 +7,16 @@ import calendar
 import csv
 import io
 
-# Acrescentos seguros (permitidos): pandas, unicodedata, re
+# Acrescentos seguros
 import pandas as pd
 import unicodedata
 import re
+import time
 
 # ========================== CONSTANTES BASE GRAPH (intacto) ==========================
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
-# ========================== CONFIG (apenas corrigi quebras de linha) =================
+# ========================== CONFIG ==================================================
 TENANT_ID      = os.getenv("TENANT_ID")
 CLIENT_ID      = os.getenv("CLIENT_ID")
 CLIENT_SECRET  = os.getenv("CLIENT_SECRET")
@@ -36,7 +37,7 @@ CST_TABLE      = "Painel"
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.xlsx"
 DST_TABLE      = "Historico"
 
-# Colunas da tabela destino (ordem exata que pediste)
+# Colunas da tabela destino (ordem exata)
 DST_COLUMNS = [
     "ref_visita","estado","data_registo","data_enc","data_entrega","gsi","empresa",
     "apresentacao","ref_farmacia","nome_farmacia","anf","segmentacao_otc","morada",
@@ -120,15 +121,13 @@ def table_to_dataframe(drive_id: str, item_id: str, session_id: str, table_name:
     return pd.DataFrame(rows, columns=headers)
 
 # ========================== ACRESCENTOS: LEFT JOINS ================================
-# Chaves que me deste:
-#  - AST["Refª Visita"]  ⟵ LEFT ⟶  BST["Refª"]
-#  - (AST+BST)["Ref. Farmácia"]  ⟵ LEFT ⟶  CST["Ref"]
-
+#  - AST["Refª Visita"]   ⟵ LEFT ⟶  BST["Refª"]
+#  - (AST+BST)["Ref. Farmácia"] ⟵ LEFT ⟶  CST["Ref"]
 def build_merged_dataframe():
-    """Lê AST/BST/CST e faz os LEFT JOINs, devolvendo o DataFrame final (ainda sem renomear para DST)."""
+    """Lê AST/BST/CST e faz os LEFT JOINs, devolvendo o DataFrame final (pré-mapeamento)."""
     site_id = get_site_id()
 
-    # AST e BST no mesmo workbook
+    # AST e BST no mesmo workbook (mas abrimos sessão separada só se necessário)
     ast_drive, ast_item = get_ids_for_path(site_id, AST_FILE_PATH)
     bst_drive, bst_item = get_ids_for_path(site_id, BST_FILE_PATH)
 
@@ -145,6 +144,11 @@ def build_merged_dataframe():
         df_bst = table_to_dataframe(bst_drive, bst_item, bst_sess, BST_TABLE)
         df_cst = table_to_dataframe(cst_drive, cst_item, cst_sess, CST_TABLE)
 
+        print("\n=== DEBUG READ TABLES ===")
+        print(f"AST: {df_ast.shape} | cols: {list(df_ast.columns)}")
+        print(f"BST: {df_bst.shape} | cols: {list(df_bst.columns)}")
+        print(f"CST: {df_cst.shape} | cols: {list(df_cst.columns)}")
+
         # LEFT JOIN 1: AST ⟵ BST
         merged1 = df_ast.merge(
             df_bst, how="left",
@@ -159,6 +163,7 @@ def build_merged_dataframe():
             suffixes=("", "_CST")
         )
 
+        print(f"MERGED: {final_df.shape}")
         return final_df
 
     finally:
@@ -171,26 +176,17 @@ def build_merged_dataframe():
 
 # ========================== ACRESCENTOS: NORMALIZAÇÃO / MAPEAMENTO =================
 def _normalize_name(s: str) -> str:
-    """Normaliza nomes: minúsculas, remove acentos, pontuação → underscore, normaliza 'refª'/'ref.' → 'ref'."""
+    """Normaliza nomes: minúsculas, remove acentos, 'refª/ref.'→'ref', pontuação→underscore; remove sufixos _bst/_cst."""
     if s is None:
         return ""
     s0 = str(s).strip().lower()
-
-    # Normalizações específicas
     s0 = s0.replace("refª", "ref")
     s0 = s0.replace("ref.", "ref")
-
-    # Remover acentos
     s1 = unicodedata.normalize("NFD", s0)
     s1 = "".join(ch for ch in s1 if not unicodedata.combining(ch))
-
-    # Substituir não alfanumérico por underscore
     s1 = re.sub(r"[^\w]+", "_", s1)
     s1 = re.sub(r"_+", "_", s1).strip("_")
-
-    # Remover sufixos de merge (_bst/_cst)
     s1 = re.sub(r"_(bst|cst)$", "", s1)
-
     return s1
 
 def build_dataframe_for_dst(df_merged: pd.DataFrame) -> pd.DataFrame:
@@ -200,14 +196,13 @@ def build_dataframe_for_dst(df_merged: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_merged.copy()
 
-    # Mapeamento explícito das 2 chaves que sabemos
+    # Mapeamento explícito das chaves que sabemos
     rename_map_explicit = {}
     if "Refª Visita" in df.columns:
         rename_map_explicit["Refª Visita"] = "ref_visita"
     if "Ref. Farmácia" in df.columns:
         rename_map_explicit["Ref. Farmácia"] = "ref_farmacia"
 
-    # Aplicar renomeação explícita primeiro
     if rename_map_explicit:
         df = df.rename(columns=rename_map_explicit)
 
@@ -227,14 +222,11 @@ def build_dataframe_for_dst(df_merged: pd.DataFrame) -> pd.DataFrame:
 
     for target in DST_COLUMNS:
         norm_t = _normalize_name(target)
-        # Se já foi mapeado explicitamente, salta
         already = [k for k, v in rename_map_explicit.items() if v == target]
         if already:
             used_src_cols.add(already[0])
             continue
-
         candidates = norm_to_srcs.get(norm_t, [])
-        # Escolher a 1ª não utilizada
         chosen = None
         for c in candidates:
             if c not in used_src_cols and c not in rename_map_explicit:
@@ -244,55 +236,92 @@ def build_dataframe_for_dst(df_merged: pd.DataFrame) -> pd.DataFrame:
             rename_map_auto[chosen] = target
             used_src_cols.add(chosen)
 
-    # Aplicar renomeação automática
     if rename_map_auto:
         df = df.rename(columns=rename_map_auto)
 
-    # Remover chaves auxiliares que não existem no destino (opcional)
+    # Limpar chaves auxiliares que não fazem parte do destino
     for aux in ["Refª", "Ref", "Ref_CST", "Ref_BST"]:
         if aux in df.columns and aux not in DST_COLUMNS:
             df = df.drop(columns=[aux])
 
-    # Selecionar e ordenar colunas (colunas em falta serão criadas com NaN)
+    # Selecionar e ordenar colunas (as que faltem ficam NaN)
     df_out = df.reindex(columns=DST_COLUMNS)
+
+    # Debug simples de cobertura de colunas
+    missing_all_nan = [c for c in DST_COLUMNS if c in df_out.columns and df_out[c].isna().all()]
+    extra_cols = [c for c in df.columns if c not in DST_COLUMNS]
+    print("\n=== DEBUG DST SCHEMA ===")
+    print(f"DST columns: {len(DST_COLUMNS)}")
+    print(f"Output shape: {df_out.shape}")
+    if missing_all_nan:
+        print(f"Cols no destino com valores vazios (todos NaN): {missing_all_nan}")
+    if extra_cols:
+        print(f"Cols do merge que não entram no destino: {extra_cols[:20]}{'...' if len(extra_cols)>20 else ''}")
 
     return df_out
 
-# ========================== ACRESCENTOS: ESCRITA NA TABELA DST =====================
-def _parse_address(address: str):
+# ========================== ACRESCENTOS: ESCRITA NA TABELA DST (sem resize) =========
+def _post_with_debug(url, headers, json_payload, label):
+    resp = requests.post(url, headers=headers, json=json_payload)
+    print(f"\n-- {label} --")
+    print("URL:", url)
+    print("Status:", resp.status_code)
+    txt = resp.text
+    print("Response:", txt[:800] + ("..." if len(txt) > 800 else ""))
+    resp.raise_for_status()
+    return resp
+
+def clear_table_body(drive_id: str, item_id: str, session_id: str, table_name: str):
+    """Limpa o corpo da tabela (dataBodyRange.clear)."""
+    h = _session_headers(session_id)
+
+    # Obter range do corpo (debug)
+    body_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
+    rb = requests.get(body_url, headers=h)
+    print("\n-- GET dataBodyRange --")
+    print("Status:", rb.status_code)
+    print("Response:", rb.text[:800])
+    rb.raise_for_status()
+
+    # Clear (mesmo que esteja vazio é OK)
+    clear_url = f"{body_url}/clear"
+    _post_with_debug(clear_url, h, {"applyTo": "all"}, "POST clear (dataBodyRange)")
+
+def add_rows_to_table_chunked(
+    drive_id: str,
+    item_id: str,
+    session_id: str,
+    table_name: str,
+    df: pd.DataFrame,
+    chunk_size: int = 1000,
+    pause_sec: float = 0.2
+):
     """
-    Recebe um address estilo: 'Folha1'!A1:Z100  ou  A1:Z100
-    Devolve (sheet_name or None, start_col_letter, start_row, end_col_letter, end_row)
+    Adiciona linhas via /rows/add em blocos.
+    Assume header já escrito e corpo limpo.
     """
-    sheet = None
-    addr = address
-    if "!" in address:
-        sheet, addr = address.split("!", 1)
-        sheet = sheet.strip("'")
+    h = _session_headers(session_id)
+    add_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add"
 
-    start, end = addr.split(":")
-    def split_cell(cell):
-        m = re.match(r"([A-Za-z]+)(\d+)", cell)
-        return m.group(1), int(m.group(2))
-    sc, sr = split_cell(start)
-    ec, er = split_cell(end)
-    return sheet, sc, sr, ec, er
+    total = len(df)
+    if total == 0:
+        print("⚠️ DF sem linhas — nada para adicionar.")
+        return
 
-def _col_letter(n):
-    """1->A, 26->Z, 27->AA"""
-    s = ""
-    while n:
-        n, r = divmod(n - 1, 26)
-        s = chr(65 + r) + s
-    return s
+    values = df.values.tolist()
+    start = 0
+    batch = 1
+    while start < total:
+        end = min(start + chunk_size, total)
+        payload = {"values": values[start:end]}
+        print(f"\n== Add batch #{batch}: rows {start}..{end-1} (count={end-start}) ==")
+        _post_with_debug(add_url, h, payload, f"POST rows/add (batch {batch})")
+        start = end
+        batch += 1
+        if pause_sec:
+            time.sleep(pause_sec)
 
-def _col_index(col_letters):
-    """A->1, Z->26, AA->27"""
-    n = 0
-    for ch in col_letters.upper():
-        n = n * 26 + (ord(ch) - 64)
-    return n
-
+    print(f"✅ Adicionadas {total} linhas à tabela '{table_name}'.")
 
 def write_dataframe_to_table(
     drive_id: str,
@@ -301,94 +330,49 @@ def write_dataframe_to_table(
     table_name: str,
     df: pd.DataFrame
 ):
+    """
+    Estratégia resiliente sem usar /resize:
+      1) Debug do range atual
+      2) PATCH headerRowRange com nomes das colunas
+      3) Limpar dataBodyRange (clear)
+      4) Adicionar linhas via rows/add em blocos
+    """
     h = _session_headers(session_id)
 
-    print("\n========== DEBUG WRITE TABLE ==========")
-    print(f"Table name: {table_name}")
-    print(f"Rows (df): {len(df)}")
-    print(f"Cols (df): {len(df.columns)}")
+    print("\n========== WRITE TABLE (resiliente) ==========")
+    print(f"Tabela: {table_name}")
+    print(f"Linhas df: {len(df)} | Cols df: {len(df.columns)}")
     print(f"Columns: {list(df.columns)}")
 
-    # 1) Obter o range atual da tabela
+    # 1) Range atual (debug)
     rng_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
     rr = requests.get(rng_url, headers=h)
-
     print("\n-- GET table range --")
     print("Status:", rr.status_code)
-    print("Response:", rr.text)
-
+    print("Response:", rr.text[:800])
     rr.raise_for_status()
-
     data = rr.json()
     addr_local = data.get("address") or data.get("addressLocal")
-
-    if not addr_local:
-        raise RuntimeError(f"Não foi possível obter o address da tabela {table_name}")
-
     print("Current table address:", addr_local)
 
-    sheet_name, start_col_letters, start_row, _, _ = _parse_address(addr_local)
-
-    print("Parsed:")
-    print("  Sheet:", sheet_name)
-    print("  Start col:", start_col_letters)
-    print("  Start row:", start_row)
-
-    # 2) Calcular novo address
-    n_rows = len(df) + 1  # header
-    n_cols = len(df.columns)
-
-    start_col_idx = _col_index(start_col_letters)
-    end_col_idx = start_col_idx + n_cols - 1
-    end_col_letters = _col_letter(end_col_idx)
-    end_row = start_row + n_rows - 1
-
-    if sheet_name:
-        sheet_escaped = sheet_name.replace("'", "''")
-        address_new = f"'{sheet_escaped}'!{start_col_letters}{start_row}:{end_col_letters}{end_row}"
-    else:
-        address_new = f"{start_col_letters}{start_row}:{end_col_letters}{end_row}"
-
-    print("\n-- RESIZE CALCULATION --")
-    print("New rows:", n_rows)
-    print("New cols:", n_cols)
-    print("New address:", address_new)
-
-    # 3) Resize
-    resize_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/resize"
-    resp = requests.post(resize_url, headers=h, json={"address": address_new})
-
-    print("\n-- POST resize --")
-    print("Status:", resp.status_code)
-    print("Response:", resp.text)
-
-    resp.raise_for_status()
-
-    # 4) Header
-    header_range_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange"
-    r_hdr = requests.patch(header_range_url, headers=h, json={"values": [list(df.columns)]})
-
+    # 2) Header
+    header_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange"
+    r_hdr = requests.patch(header_url, headers=h, json={"values": [list(df.columns)]})
     print("\n-- PATCH header --")
     print("Status:", r_hdr.status_code)
-    print("Response:", r_hdr.text)
-
+    print("Response:", r_hdr.text[:800])
     r_hdr.raise_for_status()
 
-    # 5) Body
-    if len(df) > 0:
-        body_range_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
-        r_body = requests.patch(body_range_url, headers=h, json={"values": df.values.tolist()})
+    # 3) Clear body
+    clear_table_body(drive_id, item_id, session_id, table_name)
 
-        print("\n-- PATCH body --")
-        print("Status:", r_body.status_code)
-        print("Response:", r_body.text)
+    # 4) Add dados em blocos
+    add_rows_to_table_chunked(drive_id, item_id, session_id, table_name, df, chunk_size=1000, pause_sec=0.2)
 
-        r_body.raise_for_status()
+    print("✅ WRITE COMPLETED (sem resize)")
+    print("=============================================\n")
 
-    print("✅ WRITE COMPLETED")
-    print("======================================\n")
-
-
+# ========================== PIPELINE COMPLETA =======================================
 def build_and_write_to_dst():
     """
     1) Lê AST/BST/CST e faz merge
@@ -416,5 +400,4 @@ def build_and_write_to_dst():
 
 # ========================== ENTRYPOINT =============================================
 if __name__ == "__main__":
-    # Executa tudo de ponta a ponta
     build_and_write_to_dst()
