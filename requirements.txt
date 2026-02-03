@@ -3,9 +3,6 @@ requests
 Office365-REST-Python-Client==2.6.2
 openpyxl==3.1.5
 datetime
-json
-csv
-io
 pandas
 unicodedata
 re
