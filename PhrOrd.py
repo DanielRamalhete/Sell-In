@@ -17,7 +17,7 @@ SRC_TABLE      = "Dados"
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
 DST_TABLE      = "Dados"
 
-DATE_COLUMN    = "Data Entrega"
+DATE_COLUMN    = "Data Registo"
 # ==========================
 
 # ---- Autenticação ----
