@@ -293,6 +293,7 @@ def _col_index(col_letters):
         n = n * 26 + (ord(ch) - 64)
     return n
 
+
 def write_dataframe_to_table(
     drive_id: str,
     item_id: str,
@@ -300,26 +301,41 @@ def write_dataframe_to_table(
     table_name: str,
     df: pd.DataFrame
 ):
-    """
-    Escreve df COMPLETO na tabela (header + body) redimensionando a tabela ao novo tamanho.
-    Mantém a sessão e usa endpoints do Workbook.
-    """
     h = _session_headers(session_id)
 
-    # 1) Obter o range atual da tabela para descobrir folha e célula inicial
+    print("\n========== DEBUG WRITE TABLE ==========")
+    print(f"Table name: {table_name}")
+    print(f"Rows (df): {len(df)}")
+    print(f"Cols (df): {len(df.columns)}")
+    print(f"Columns: {list(df.columns)}")
+
+    # 1) Obter o range atual da tabela
     rng_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
-    rr = requests.get(rng_url, headers=h); rr.raise_for_status()
-    addr_local = rr.json().get("address", rr.json().get("addressLocal"))  # 'Folha'!A1:Z50
+    rr = requests.get(rng_url, headers=h)
+
+    print("\n-- GET table range --")
+    print("Status:", rr.status_code)
+    print("Response:", rr.text)
+
+    rr.raise_for_status()
+
+    data = rr.json()
+    addr_local = data.get("address") or data.get("addressLocal")
+
     if not addr_local:
         raise RuntimeError(f"Não foi possível obter o address da tabela {table_name}")
 
-    sheet_name, start_col_letters, start_row, _, _ = _parse_address(addr_local)
-    if sheet_name is None:
-        # Fallback (raro): se não vier o nome da folha
-        sheet_name = rr.json().get("worksheet", {}).get("name", None)
+    print("Current table address:", addr_local)
 
-    # 2) Calcular novo address (tamanho = header + len(df) linhas, n_colunas = df.shape[1])
-    n_rows = (len(df) + 1)  # +1 header
+    sheet_name, start_col_letters, start_row, _, _ = _parse_address(addr_local)
+
+    print("Parsed:")
+    print("  Sheet:", sheet_name)
+    print("  Start col:", start_col_letters)
+    print("  Start row:", start_row)
+
+    # 2) Calcular novo address
+    n_rows = len(df) + 1  # header
     n_cols = len(df.columns)
 
     start_col_idx = _col_index(start_col_letters)
@@ -327,27 +343,51 @@ def write_dataframe_to_table(
     end_col_letters = _col_letter(end_col_idx)
     end_row = start_row + n_rows - 1
 
-    # Montar address qualificado com nome da folha
-    sheet_escaped = sheet_name.replace("'", "''") if sheet_name else None
-    address_new = (
-        f"'{sheet_escaped}'!{start_col_letters}{start_row}:{end_col_letters}{end_row}"
-        if sheet_escaped else f"{start_col_letters}{start_row}:{end_col_letters}{end_row}"
-    )
+    if sheet_name:
+        sheet_escaped = sheet_name.replace("'", "''")
+        address_new = f"'{sheet_escaped}'!{start_col_letters}{start_row}:{end_col_letters}{end_row}"
+    else:
+        address_new = f"{start_col_letters}{start_row}:{end_col_letters}{end_row}"
 
-    # 3) Resize da tabela ao novo address
+    print("\n-- RESIZE CALCULATION --")
+    print("New rows:", n_rows)
+    print("New cols:", n_cols)
+    print("New address:", address_new)
+
+    # 3) Resize
     resize_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/resize"
-    requests.post(resize_url, headers=h, json={"address": address_new}).raise_for_status()
+    resp = requests.post(resize_url, headers=h, json={"address": address_new})
 
-    # 4) Escrever HEADER
+    print("\n-- POST resize --")
+    print("Status:", resp.status_code)
+    print("Response:", resp.text)
+
+    resp.raise_for_status()
+
+    # 4) Header
     header_range_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/headerRowRange"
-    requests.patch(header_range_url, headers=h, json={"values": [list(df.columns)]}).raise_for_status()
+    r_hdr = requests.patch(header_range_url, headers=h, json={"values": [list(df.columns)]})
 
-    # 5) Escrever DATA BODY (se houver linhas)
+    print("\n-- PATCH header --")
+    print("Status:", r_hdr.status_code)
+    print("Response:", r_hdr.text)
+
+    r_hdr.raise_for_status()
+
+    # 5) Body
     if len(df) > 0:
         body_range_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/dataBodyRange"
-        values = df.values.tolist()
-        requests.patch(body_range_url, headers=h, json={"values": values}).raise_for_status()
-    # Se não houver linhas, a tabela ficou apenas com header (após resize), o que é válido.
+        r_body = requests.patch(body_range_url, headers=h, json={"values": df.values.tolist()})
+
+        print("\n-- PATCH body --")
+        print("Status:", r_body.status_code)
+        print("Response:", r_body.text)
+
+        r_body.raise_for_status()
+
+    print("✅ WRITE COMPLETED")
+    print("======================================\n")
+
 
 def build_and_write_to_dst():
     """
