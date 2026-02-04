@@ -5,6 +5,7 @@ import unicodedata
 import re
 import time
 import math
+from io import BytesIO
 
 # ========================== GRAPH BASE =======================
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -26,9 +27,13 @@ BST_TABLE      = "Dados"
 CST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/PAINEL_WBRANDS_26.xlsx"
 CST_TABLE      = "Painel"
 
-# ---- DESTINO ----
+# ---- DESTINO (tabela) ----
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.xlsx"
 DST_TABLE      = "Historico"
+
+# === CSV EXPORT ===
+# Caminho do CSV a criar no SharePoint (podes mudar o nome/pasta à vontade)
+CSV_DEST_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
 
 # Colunas da tabela destino (ordem exata)
 DST_COLUMNS = [
@@ -139,7 +144,6 @@ def build_dataframe_for_dst(df):
             if _norm(c) == _norm(d):
                 rename[c] = d
                 break
-
     df = df.rename(columns=rename)
     df = df.reindex(columns=DST_COLUMNS)
     return df
@@ -205,6 +209,34 @@ def clear_and_write_table(drive_id, item_id, table, df):
     finally:
         close_session(drive_id, item_id, sess)
 
+# ========================== CSV EXPORT =====================
+def upload_csv_to_sharepoint(csv_bytes: bytes, dest_path: str):
+    """
+    Faz upload (cria/sobrescreve) de um ficheiro CSV no SharePoint via Graph:
+    PUT /drives/{drive_id}/root:{dest_path}:/content
+    """
+    site_id = get_site_id()
+    drive_id = get_drive_id(site_id)
+
+    url = f"{GRAPH_BASE}/drives/{drive_id}/root:{dest_path}:/content"
+    headers = dict(base_headers)
+    headers["Content-Type"] = "text/csv; charset=utf-8"
+
+    r = requests.put(url, headers=headers, data=csv_bytes)
+    r.raise_for_status()
+    return r.json()
+
+def dataframe_to_csv_bytes(df: pd.DataFrame, sep: str = ",") -> bytes:
+    """
+    Converte um DataFrame para CSV (UTF-8 BOM) e devolve bytes.
+    - Por omissão usa separador vírgula (',').
+    - Se preferires ponto-e-vírgula (';'), muda o parâmetro sep.
+    """
+    # BOM para abrir diretamente no Excel com acentuação correta
+    csv_str = df.to_csv(index=False, sep=sep, line_terminator="\n")
+    # UTF-8 BOM
+    return ("\ufeff" + csv_str).encode("utf-8")
+
 # ========================== PIPELINE FINAL ==================
 def build_and_write_to_dst():
     # 1) Merge
@@ -216,12 +248,17 @@ def build_and_write_to_dst():
     # 3) Regra de negócio: empresa WBRANDS -> 1ª palavra da apresentação
     df_dst = apply_empresa_wbrands_rule(df_dst)
 
-    # 4) Escrever no destino
+    # 4) Escrever no destino (tabela Excel)
     site_id = get_site_id()
     dst_drive, dst_item = get_ids_for_path(site_id, DST_FILE_PATH)
-
     clear_and_write_table(dst_drive, dst_item, DST_TABLE, df_dst)
-    print(f"✅ Concluído: {len(df_dst)} linhas gravadas em '{DST_TABLE}'")
+
+    # 5) Exportar também para CSV (no mesmo site/drive)
+    #    -> Se preferires ';' como separador (muito comum em PT), usa sep=';'
+    csv_bytes = dataframe_to_csv_bytes(df_dst, sep=",")  # ou sep=";"
+    upload_csv_to_sharepoint(csv_bytes, CSV_DEST_PATH)
+
+    print(f"✅ Concluído: {len(df_dst)} linhas gravadas em '{DST_TABLE}' e CSV criado em '{CSV_DEST_PATH}'")
 
 # ========================== ENTRYPOINT ======================
 if __name__ == "__main__":
