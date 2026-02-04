@@ -233,7 +233,7 @@ def dataframe_to_csv_bytes(df: pd.DataFrame, sep: str = ",") -> bytes:
     - Se preferires ponto-e-vírgula (';'), muda o parâmetro sep.
     """
     # BOM para abrir diretamente no Excel com acentuação correta
-    csv_str = df.to_csv(index=False, sep=sep, line_terminator="\n")
+    csv_str = df.to_csv(index=False, sep=sep, lineterminator="\n")
     # UTF-8 BOM
     return ("\ufeff" + csv_str).encode("utf-8")
 
