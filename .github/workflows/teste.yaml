@@ -1,0 +1,38 @@
+
+name: GreenTape
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Inverno em PT (Nov–Mar): 05:05 UTC = 05:05 PT
+    - cron: '30 4 * 11-12 *'  # Novembro–Dezembro
+    - cron: '30 4 * 1-3 *'    # Janeiro–Março
+
+    # Verão em PT (Apr–Oct): 04:05 UTC = 05:05 PT
+    - cron: '30 3 * 4-10 *'   # Abril–Outubro
+
+jobs:
+  run-greentape-then-a:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar última run para CSV
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
+          SITE_PATH: ${{ secrets.SITE_PATH }}
+        run: python GreenTapeFinal.py
