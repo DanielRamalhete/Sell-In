@@ -5,7 +5,6 @@ import unicodedata
 import re
 import time
 import math
-from io import BytesIO
 
 # ========================== GRAPH BASE =======================
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -27,15 +26,14 @@ BST_TABLE      = "Dados"
 CST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/PAINEL_WBRANDS_26.xlsx"
 CST_TABLE      = "Painel"
 
-# ---- DESTINO (tabela) ----
+# ---- DESTINO (Excel) ----
 DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.xlsx"
 DST_TABLE      = "Historico"
 
-# === CSV EXPORT ===
-# Caminho do CSV a criar no SharePoint (podes mudar o nome/pasta à vontade)
+# ---- DESTINO (CSV) ----
 CSV_DEST_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
 
-# Colunas da tabela destino (ordem exata)
+# Colunas finais (ordem exata)
 DST_COLUMNS = [
     "ref_visita","estado","data_registo","data_enc","data_entrega","gsi","empresa",
     "apresentacao","ref_farmacia","nome_farmacia","anf","segmentacao_otc","morada",
@@ -47,31 +45,53 @@ DST_COLUMNS = [
 
 # ========================== AUTENTICAÇÃO (INTACTA) ==========
 app = msal.ConfidentialClientApplication(
-    CLIENT_ID, authority=f"https://login.microsoftonline.com/{TENANT_ID}",
+    CLIENT_ID,
+    authority=f"https://login.microsoftonline.com/{TENANT_ID}",
     client_credential=CLIENT_SECRET
 )
-token_result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-token = token_result["access_token"]
-base_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+token = app.acquire_token_for_client(
+    scopes=["https://graph.microsoft.com/.default"]
+)["access_token"]
+
+base_headers = {
+    "Authorization": f"Bearer {token}",
+    "Content-Type": "application/json"
+}
 
 # ========================== HELPERS BASE GRAPH (INTACTOS) ===
 def get_site_id():
-    return requests.get(f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}", headers=base_headers).json()["id"]
+    return requests.get(
+        f"{GRAPH_BASE}/sites/{SITE_HOSTNAME}:/{SITE_PATH}",
+        headers=base_headers
+    ).json()["id"]
 
 def get_drive_id(site_id):
-    return requests.get(f"{GRAPH_BASE}/sites/{site_id}/drive", headers=base_headers).json()["id"]
+    return requests.get(
+        f"{GRAPH_BASE}/sites/{site_id}/drive",
+        headers=base_headers
+    ).json()["id"]
 
 def get_item_id(drive_id, path):
-    return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
+    return requests.get(
+        f"{GRAPH_BASE}/drives/{drive_id}/root:{path}",
+        headers=base_headers
+    ).json()["id"]
 
 def create_session(drive_id, item_id):
-    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
-                      headers=base_headers, data=json.dumps({"persistChanges": True}))
+    r = requests.post(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
+        headers=base_headers,
+        json={"persistChanges": True}
+    )
     return r.json()["id"]
 
 def close_session(drive_id, item_id, session_id):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
-    requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession", headers=h)
+    h = dict(base_headers)
+    h["workbook-session-id"] = session_id
+    requests.post(
+        f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/closeSession",
+        headers=h
+    )
 
 # ========================== UTILIDADES ======================
 def _session_headers(session_id):
@@ -85,10 +105,9 @@ def get_ids_for_path(site_id, path):
     return drive_id, item_id
 
 def read_table(drive_id, item_id, session_id, table):
-    """Lê uma tabela Excel via Graph (header + body) para DataFrame."""
     h = _session_headers(session_id)
 
-    hdr = requests.get(
+    headers = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
         headers=h
     ).json()["values"][0]
@@ -98,11 +117,9 @@ def read_table(drive_id, item_id, session_id, table):
         headers=h
     ).json().get("values", [])
 
-    return pd.DataFrame(body, columns=hdr)
+    return pd.DataFrame(body, columns=headers)
 
 # ========================== MERGES ==========================
-#  - AST["Refª Visita"]   ⟵ LEFT ⟶  BST["Refª"]
-#  - (AST+BST)["Ref. Farmácia"] ⟵ LEFT ⟶  CST["Ref"]
 def build_merged_dataframe():
     site_id = get_site_id()
 
@@ -117,89 +134,89 @@ def build_merged_dataframe():
         df_bst = read_table(ast_drive, ast_item, sess_ast, BST_TABLE)
         df_cst = read_table(cst_drive, cst_item, sess_cst, CST_TABLE)
 
-        df = (
+        return (
             df_ast
             .merge(df_bst, how="left", left_on="Refª Visita", right_on="Refª")
             .merge(df_cst, how="left", left_on="Ref. Farmácia", right_on="Ref")
         )
 
-        return df
-
     finally:
         close_session(ast_drive, ast_item, sess_ast)
         close_session(cst_drive, cst_item, sess_cst)
 
-# ========================== NORMALIZAÇÃO -> DST ====================
+# ========================== NORMALIZAÇÃO ====================
 def _norm(s):
-    s = str(s).lower().replace("refª", "ref").replace("ref.", "ref").replace("dim","gsi")
+    s = str(s).lower().replace("refª", "ref").replace("ref.", "ref")
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^\w]+", "_", s).strip("_")
 
 def build_dataframe_for_dst(df):
-    """Mapeia/renomeia colunas do merge para corresponder exatamente a DST_COLUMNS e aplica a mesma ordem."""
     rename = {}
     for c in df.columns:
         for d in DST_COLUMNS:
             if _norm(c) == _norm(d):
                 rename[c] = d
                 break
-    df = df.rename(columns=rename)
-    df = df.reindex(columns=DST_COLUMNS)
-    return df
+    return df.rename(columns=rename).reindex(columns=DST_COLUMNS)
 
-# ========================== REGRA DE NEGÓCIO (WBRANDS) ====================
-def apply_empresa_wbrands_rule(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Se empresa == 'WBRANDS', substituir pelo primeiro token da coluna 'apresentacao'.
-    Se 'apresentacao' estiver vazia, mantém 'WBRANDS'.
-    """
+# ========================== REGRA WBRANDS ===================
+def apply_empresa_wbrands_rule(df):
     df = df.copy()
     mask = df["empresa"].astype(str).str.upper() == "WBRANDS"
-    first_token = (
+    token = (
         df.loc[mask, "apresentacao"]
-          .fillna("")
-          .astype(str)
-          .str.strip()
-          .str.split()
-          .str[0]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.split()
+        .str[0]
     )
-    non_empty = first_token.ne("")
-    df.loc[mask & non_empty, "empresa"] = first_token[non_empty]
+    df.loc[mask & token.ne(""), "empresa"] = token[token.ne("")]
     return df
 
-# ========================== JSON-SAFE (por célula) ====================
+# ========================== CONVERSÃO DE DATAS ✅ ===================
+def convert_excel_serial_dates(df, date_columns):
+    """
+    Converte datas Excel (número serial) para datetime real.
+    Origin correto do Excel: 1899-12-30
+    """
+    df = df.copy()
+    for col in date_columns:
+        if col in df.columns:
+            df[col] = pd.to_datetime(
+                df[col],
+                unit="D",
+                origin="1899-12-30",
+                errors="coerce"
+            )
+    return df
+
+# ========================== JSON SAFE =======================
 def json_safe_value(v):
-    """Converte NaN/Inf para None (JSON válido)."""
     if v is None:
         return None
-    if isinstance(v, float):
-        if math.isnan(v) or math.isinf(v):
-            return None
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
     return v
 
-# ========================== WRITE (CLEAR + ROWS/ADD) ====================
+# ========================== WRITE EXCEL =====================
 def clear_and_write_table(drive_id, item_id, table, df):
-    """Escreve df na tabela: PATCH header, CLEAR body, ROWS/ADD em blocos."""
     sess = create_session(drive_id, item_id)
     h = _session_headers(sess)
 
     try:
-        # 1) Header
         requests.patch(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
             headers=h, json={"values": [list(df.columns)]}
         ).raise_for_status()
 
-        # 2) Limpar corpo
         requests.post(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange/clear",
             headers=h, json={"applyTo": "all"}
         ).raise_for_status()
 
-        # 3) Adicionar linhas (chunked) com JSON-safe
-        raw_rows = df.values.tolist()
-        rows = [[json_safe_value(v) for v in row] for row in raw_rows]
+        rows = [[json_safe_value(v) for v in row] for row in df.values.tolist()]
         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/rows/add"
 
         for i in range(0, len(rows), 1000):
@@ -209,12 +226,12 @@ def clear_and_write_table(drive_id, item_id, table, df):
     finally:
         close_session(drive_id, item_id, sess)
 
-# ========================== CSV EXPORT =====================
-def upload_csv_to_sharepoint(csv_bytes: bytes, dest_path: str):
-    """
-    Faz upload (cria/sobrescreve) de um ficheiro CSV no SharePoint via Graph:
-    PUT /drives/{drive_id}/root:{dest_path}:/content
-    """
+# ========================== CSV EXPORT ======================
+def dataframe_to_csv_bytes(df, sep=","):
+    csv_str = df.to_csv(index=False, sep=sep, lineterminator="\n")
+    return ("\ufeff" + csv_str).encode("utf-8")
+
+def upload_csv_to_sharepoint(csv_bytes, dest_path):
     site_id = get_site_id()
     drive_id = get_drive_id(site_id)
 
@@ -224,41 +241,28 @@ def upload_csv_to_sharepoint(csv_bytes: bytes, dest_path: str):
 
     r = requests.put(url, headers=headers, data=csv_bytes)
     r.raise_for_status()
-    return r.json()
-
-def dataframe_to_csv_bytes(df: pd.DataFrame, sep: str = ",") -> bytes:
-    """
-    Converte um DataFrame para CSV (UTF-8 BOM) e devolve bytes.
-    - Por omissão usa separador vírgula (',').
-    - Se preferires ponto-e-vírgula (';'), muda o parâmetro sep.
-    """
-    # BOM para abrir diretamente no Excel com acentuação correta
-    csv_str = df.to_csv(index=False, sep=sep, lineterminator="\n")
-    # UTF-8 BOM
-    return ("\ufeff" + csv_str).encode("utf-8")
 
 # ========================== PIPELINE FINAL ==================
 def build_and_write_to_dst():
-    # 1) Merge
-    df_merged = build_merged_dataframe()
+    df = build_merged_dataframe()
+    df = build_dataframe_for_dst(df)
+    df = apply_empresa_wbrands_rule(df)
 
-    # 2) Conformidade com o schema da DST
-    df_dst = build_dataframe_for_dst(df_merged)
+    # ✅ Converter colunas de data
+    df = convert_excel_serial_dates(
+        df,
+        ["data_registo", "data_enc", "data_entrega"]
+    )
 
-    # 3) Regra de negócio: empresa WBRANDS -> 1ª palavra da apresentação
-    df_dst = apply_empresa_wbrands_rule(df_dst)
-
-    # 4) Escrever no destino (tabela Excel)
     site_id = get_site_id()
     dst_drive, dst_item = get_ids_for_path(site_id, DST_FILE_PATH)
-    clear_and_write_table(dst_drive, dst_item, DST_TABLE, df_dst)
 
-    # 5) Exportar também para CSV (no mesmo site/drive)
-    #    -> Se preferires ';' como separador (muito comum em PT), usa sep=';'
-    csv_bytes = dataframe_to_csv_bytes(df_dst, sep=",")  # ou sep=";"
+    clear_and_write_table(dst_drive, dst_item, DST_TABLE, df)
+
+    csv_bytes = dataframe_to_csv_bytes(df, sep=",")  # usar ";" se preferires
     upload_csv_to_sharepoint(csv_bytes, CSV_DEST_PATH)
 
-    print(f"✅ Concluído: {len(df_dst)} linhas gravadas em '{DST_TABLE}' e CSV criado em '{CSV_DEST_PATH}'")
+    print(f"✅ Concluído: {len(df)} linhas | Excel + CSV atualizados")
 
 # ========================== ENTRYPOINT ======================
 if __name__ == "__main__":
