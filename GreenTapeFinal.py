@@ -104,20 +104,22 @@ def get_ids_for_path(site_id, path):
 
 def read_table(drive_id, item_id, session_id, table):
     h = _session_headers(session_id)
+
     hdr = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
         headers=h
     ).json()["values"][0]
+
     body = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange",
         headers=h
     ).json().get("values", [])
+
     return pd.DataFrame(body, columns=hdr)
 
 # ========================== MERGES ==========================
 def build_merged_dataframe():
     site_id = get_site_id()
-
     ast_drive, ast_item = get_ids_for_path(site_id, AST_FILE_PATH)
     cst_drive, cst_item = get_ids_for_path(site_id, CST_FILE_PATH)
 
@@ -132,9 +134,8 @@ def build_merged_dataframe():
         return (
             df_ast
             .merge(df_bst, how="left", left_on="Refª Visita", right_on="Refª")
-            .merge(df_cst,   how="left", left_on="Ref. Farmácia", right_on="Ref")
+            .merge(df_cst, how="left", left_on="Ref. Farmácia", right_on="Ref")
         )
-
     finally:
         close_session(ast_drive, ast_item, sess_ast)
         close_session(cst_drive, cst_item, sess_cst)
@@ -150,8 +151,8 @@ def build_dataframe_for_dst(df):
     ren = {}
     for c in df.columns:
         for d in DST_COLUMNS:
-            if _norm(c) == _norm(d):
-                ren[c] = d
+            if _norm(c)==_norm(d):
+                ren[c]=d
                 break
     return df.rename(columns=ren).reindex(columns=DST_COLUMNS)
 
@@ -179,16 +180,43 @@ def convert_excel_serial_dates(df, cols):
         numeric = pd.to_numeric(df[col], errors="coerce")
         if numeric.notna().sum() == 0:
             continue
-        df[col] = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+        df[col] = pd.to_datetime(
+            numeric, unit="D", origin="1899-12-30", errors="coerce"
+        )
     return df
 
-# ========================== JSON-SAFE ======================
-def json_safe_value(v):
+# ========================== JSON-SAFE UNIVERSAL ====================
+def normalize_cell_for_json(v):
+    """Converte QUALQUER tipo não JSON → valor seguro."""
+    
+    # None
     if v is None:
         return None
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+
+    # pandas NaT
+    if isinstance(v, pd.NaT.__class__):
         return None
-    return v
+
+    # Timestamps → string
+    if isinstance(v, pd.Timestamp):
+        return v.strftime("%Y-%m-%d")
+
+    # Floats → None se NaN/inf
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+
+    # Strings → ok
+    if isinstance(v, str):
+        return v
+
+    # Inteiros → ok
+    if isinstance(v, int):
+        return v
+
+    # Outros tipos esquisitos → string
+    return str(v)
 
 # ========================== WRITE EXCEL =====================
 def clear_and_write_table(drive_id, item_id, table, df):
@@ -198,24 +226,20 @@ def clear_and_write_table(drive_id, item_id, table, df):
     try:
         requests.patch(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
-            headers=h, json={"values": [ list(df.columns) ]}
+            headers=h,
+            json={"values": [ list(df.columns) ]}
         ).raise_for_status()
 
         requests.post(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange/clear",
-            headers=h, json={"applyTo":"all"}
+            headers=h,
+            json={"applyTo":"all"}
         ).raise_for_status()
 
-        raw_rows = df.values.tolist()
+        # JSON‑safe row building
         rows = []
-        for row in raw_rows:
-            new_row = []
-            for v in row:
-                if isinstance(v, pd.Timestamp):
-                    new_row.append(v.strftime("%Y-%m-%d"))
-                else:
-                    new_row.append(json_safe_value(v))
-            rows.append(new_row)
+        for row in df.values.tolist():
+            rows.append([normalize_cell_for_json(v) for v in row])
 
         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/rows/add"
 
