@@ -142,7 +142,7 @@ def build_merged_dataframe():
 
 # ========================== NORMALIZAÇÃO DST ====================
 def _norm(s):
-    s = str(s).lower().replace("refª","ref").replace("ref.","ref")
+    s = str(s).lower().replace("refª","ref").replace("ref.","ref").replace("dim","gsi")
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^\w]+","_",s).strip("_")
