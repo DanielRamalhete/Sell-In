@@ -33,7 +33,7 @@ DST_TABLE      = "Historico"
 # ---- DESTINO CSV ----
 CSV_DEST_PATH  = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
 
-# Colunas finais
+# ---- COLUNAS FINAIS ----
 DST_COLUMNS = [
     "ref_visita","estado","data_registo","data_enc","data_entrega","gsi","empresa",
     "apresentacao","ref_farmacia","nome_farmacia","anf","segmentacao_otc","morada",
@@ -140,7 +140,7 @@ def build_merged_dataframe():
         close_session(ast_drive, ast_item, sess_ast)
         close_session(cst_drive, cst_item, sess_cst)
 
-# ========================== NORMALIZAÇÃO ====================
+# ========================== NORMALIZAÇÃO DST ====================
 def _norm(s):
     s = str(s).lower().replace("refª","ref").replace("ref.","ref")
     s = unicodedata.normalize("NFD", s)
@@ -159,63 +159,36 @@ def build_dataframe_for_dst(df):
 # ========================== REGRA WBRANDS ====================
 def apply_empresa_wbrands_rule(df):
     df = df.copy()
-    mask = df["empresa"].astype(str).str.upper() == "WBRANDS"
-    token = (
+    mask = df["empresa"].astype(str).str.upper()=="WBRANDS"
+    tokens = (
         df.loc[mask,"apresentacao"]
         .fillna("")
         .astype(str)
-        .str.strip()
-        .str.split()
-        .str[0]
+        .str.strip().str.split().str[0]
     )
-    df.loc[mask & token.ne(""), "empresa"] = token[token.ne("")]
+    df.loc[mask & tokens.ne(""), "empresa"] = tokens[tokens.ne("")]
     return df
 
 # ========================== CONVERSÃO DE DATAS ====================
 def convert_excel_serial_dates(df, cols):
     df = df.copy()
     for col in cols:
-        if col not in df.columns:
-            continue
+        if col not in df.columns: continue
         numeric = pd.to_numeric(df[col], errors="coerce")
-        if numeric.notna().sum() == 0:
-            continue
-        df[col] = pd.to_datetime(
-            numeric, unit="D", origin="1899-12-30", errors="coerce"
-        )
+        if numeric.notna().sum() == 0: continue
+        df[col] = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
     return df
 
 # ========================== JSON-SAFE UNIVERSAL ====================
 def normalize_cell_for_json(v):
-    """Converte QUALQUER tipo não JSON → valor seguro."""
-    
-    # None
-    if v is None:
-        return None
-
-    # pandas NaT
-    if isinstance(v, pd.NaT.__class__):
-        return None
-
-    # Timestamps → string
-    if isinstance(v, pd.Timestamp):
-        return v.strftime("%Y-%m-%d")
-
-    # Floats → None se NaN/inf
+    if v is None: return None
+    if isinstance(v, pd.NaT.__class__): return None
+    if isinstance(v, pd.Timestamp): return v.strftime("%Y-%m-%d")
+    if hasattr(v, "isoformat"): return v.isoformat()
     if isinstance(v, float):
-        if math.isnan(v) or math.isinf(v):
-            return None
+        if math.isnan(v) or math.isinf(v): return None
         return v
-
-    # Strings → ok
-    if isinstance(v, str):
-        return v
-
-    # Inteiros → ok
-    if isinstance(v, int):
-        return v
-
-    # Outros tipos esquisitos → string
+    if isinstance(v, (str,int)): return v
     return str(v)
 
 # ========================== WRITE EXCEL =====================
@@ -226,26 +199,21 @@ def clear_and_write_table(drive_id, item_id, table, df):
     try:
         requests.patch(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
-            headers=h,
-            json={"values": [ list(df.columns) ]}
+            headers=h, json={"values":[list(df.columns)]}
         ).raise_for_status()
 
         requests.post(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange/clear",
-            headers=h,
-            json={"applyTo":"all"}
+            headers=h, json={"applyTo":"all"}
         ).raise_for_status()
 
-        # JSON‑safe row building
         rows = []
         for row in df.values.tolist():
             rows.append([normalize_cell_for_json(v) for v in row])
 
         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/rows/add"
-
         for i in range(0, len(rows), 1000):
-            chunk = rows[i:i+1000]
-            requests.post(url, headers=h, json={"values": chunk}).raise_for_status()
+            requests.post(url, headers=h, json={"values":rows[i:i+1000]}).raise_for_status()
             time.sleep(0.2)
 
     finally:
@@ -259,13 +227,9 @@ def dataframe_to_csv_bytes(df, sep=","):
 def upload_csv_to_sharepoint(csv_bytes, dest_path):
     site_id = get_site_id()
     drive_id = get_drive_id(site_id)
-
     url = f"{GRAPH_BASE}/drives/{drive_id}/root:{dest_path}:/content"
-    h = dict(base_headers)
-    h["Content-Type"] = "text/csv; charset=utf-8"
-
-    r = requests.put(url, headers=h, data=csv_bytes)
-    r.raise_for_status()
+    h = dict(base_headers); h["Content-Type"]="text/csv; charset=utf-8"
+    requests.put(url, headers=h, data=csv_bytes).raise_for_status()
 
 # ========================== PIPELINE FINAL ==================
 def build_and_write_to_dst():
@@ -273,18 +237,25 @@ def build_and_write_to_dst():
     df = build_dataframe_for_dst(df)
     df = apply_empresa_wbrands_rule(df)
 
-    df = convert_excel_serial_dates(
-        df, ["data_registo","data_enc","data_entrega"]
-    )
+    df = convert_excel_serial_dates(df, ["data_registo","data_enc","data_entrega"])
 
+    # >>> NORMALIZAR PARA APENAS DATA
+    for col in ["data_registo","data_enc","data_entrega"]:
+        if col in df.columns:
+            df[col] = df[col].dt.date
+
+    # ---- Escrever Excel ----
     site_id = get_site_id()
     dst_drive, dst_item = get_ids_for_path(site_id, DST_FILE_PATH)
     clear_and_write_table(dst_drive, dst_item, DST_TABLE, df)
 
-    csv_bytes = dataframe_to_csv_bytes(df, sep=",")
-    upload_csv_to_sharepoint(csv_bytes, CSV_DEST_PATH)
+    # ---- Exportar CSV ----
+    upload_csv_to_sharepoint(
+        dataframe_to_csv_bytes(df, sep=","),  # muda para ";" se quiseres PT
+        CSV_DEST_PATH
+    )
 
-    print(f"✅ Concluído: {len(df)} linhas escritas no Excel + CSV criado.")
+    print(f"✅ Concluído: {len(df)} linhas processadas | Excel + CSV atualizados.")
 
 # ========================== ENTRYPOINT ======================
 if __name__ == "__main__":
