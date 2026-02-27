@@ -242,7 +242,7 @@ def build_and_write_to_dst():
             df[col] = df[col].dt.date
 
     # ==========================================================
-    #        🔥 FILTRO FINAL PARA APENAS ESTAS EMPRESAS
+    #         FILTRO FINAL PARA APENAS ESTAS EMPRESAS
     # ==========================================================
     EMPRESAS_WHITELIST = {
         "bbraun","dr. scholl's","infacol","kelo.cell","lifergy",
