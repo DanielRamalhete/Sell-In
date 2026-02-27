@@ -1,23 +1,32 @@
-
 import os, json, requests, msal
 from datetime import datetime, timedelta
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 # ========= CONFIG =========
-TENANT_ID      = os.getenv("TENANT_ID")
-CLIENT_ID      = os.getenv("CLIENT_ID")
-CLIENT_SECRET  = os.getenv("CLIENT_SECRET")
-SITE_HOSTNAME  = os.getenv("SITE_HOSTNAME")
-SITE_PATH      = os.getenv("SITE_PATH")
+TENANT_ID = os.getenv("TENANT_ID")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+SITE_HOSTNAME = os.getenv("SITE_HOSTNAME")
+SITE_PATH = os.getenv("SITE_PATH")
 
-SRC_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
-SRC_TABLE      = "TabelaAutomatica"
+SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
+SRC_TABLE = "TabelaAutomatica"
 
-DST_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
-DST_TABLE      = "Historico"
+DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
+DST_TABLE = "Historico"
 
-DATE_COLUMN    = "Data Entrega"
+DATE_COLUMN = "Data Entrega"
+
+# --- ### NOVO: filtro de empresas ---
+EMPRESA_COLUMN = "Empresa"  # <--- muda aqui se o nome da coluna for diferente
+EMPRESAS_WHITELIST = [
+    "Bbraun", "Dr. Scholl's", "Infacol", "Jordan", "Kelo.Cell", "Lifergy",
+    "Medela", "Monchique", "Moskout", "Pranarom", "Roche",
+    "Sidefarma", "WAB", "WBRANDS"
+]
+# Normalização para matching robusto
+_EMPRESAS_NORM = {e.strip().lower(): e for e in EMPRESAS_WHITELIST}
 # ==========================
 
 # ---- Autenticação ----
@@ -66,9 +75,9 @@ def list_tables(drive_id, item_id, session_id):
     for t in data:
         ws_name = (t.get("worksheet") or {}).get("name")
         print(" - id:", t.get("id"),
-              "| name:", t.get("name"),
-              "| showHeaders:", t.get("showHeaders"),
-              "| worksheet:", ws_name)
+              "\n  name:", t.get("name"),
+              "\n  showHeaders:", t.get("showHeaders"),
+              "\n  worksheet:", ws_name)
     return data
 
 def get_table_headers(drive_id, item_id, table_name, session_id):
@@ -94,10 +103,9 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         headers = get_table_headers(drive_id, item_id, table_name, session_id)
         if headers:
             print(f"[DEBUG] headerRowRange → {headers}")
-            return headers
+        return headers
     except requests.HTTPError:
         print("[DEBUG] headerRowRange falhou; a tentar fallback por /columns...")
-
     # 2) /columns -> names
     h = dict(base_headers); h["workbook-session-id"] = session_id
     url_cols = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/columns"
@@ -114,7 +122,6 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         print("[DEBUG] /columns falhou. STATUS:", rc.status_code)
         try: print("[DEBUG] /columns JSON:", rc.json())
         except Exception: print("[DEBUG] /columns TEXT:", rc.text)
-
     # 3) /range -> primeira linha
     url_rng = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
     rr = requests.get(url_rng, headers=h)
@@ -131,7 +138,6 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         print("[DEBUG] /range falhou. STATUS:", rr.status_code)
         try: print("[DEBUG] /range JSON:", rr.json())
         except Exception: print("[DEBUG] /range TEXT:", rr.text)
-
     rr.raise_for_status()  # força erro p/ ver detalhe
 
 # ---- Outras helpers ----
@@ -223,6 +229,15 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
+# ---- ### NOVO: helpers de filtro por empresa ---
+def _norm_text(x):
+    if x is None:
+        return ""
+    return str(x).strip().lower()
+
+def is_empresa_permitida(value):
+    return _norm_text(value) in _EMPRESAS_NORM
+
 # ---- DELETE via $batch (ItemAt) + recolha de falhas + fallback sequencial
 def delete_table_rows_by_index_batch(
     drive_id, item_id, table_name, session_id, row_indices,
@@ -232,7 +247,6 @@ def delete_table_rows_by_index_batch(
     Apaga rows do corpo da Tabela por índice (0-based) usando JSON $batch (até 20/lote),
     com endereçamento via função: rows/$/ItemAt(index={n}).
     Recolhe as falhas e devolve {"deleted": X, "failed": [indices...]}.
-
     Se o $batch falhar com ApiNotFound/InvalidArgument, tenta fallback sequencial.
     """
     if not row_indices:
@@ -241,6 +255,7 @@ def delete_table_rows_by_index_batch(
 
     deleted_total = 0
     failed_global = []
+
     batch_endpoint = f"{GRAPH_BASE}/$batch"
 
     def chunks(lst, size):
@@ -276,24 +291,20 @@ def delete_table_rows_by_index_batch(
                 "url": rel_url,
                 "headers": { "workbook-session-id": session_id }
             })
-
         print("[DEBUG][BATCH-DEL] URLs no lote:",
               [req["url"] for req in requests_list])
 
         payload = { "requests": requests_list }
-
         attempt = 0
         while True:
             attempt += 1
             print(f"[DEBUG][BATCH-DEL] POST {batch_endpoint} (lote {len(chunk)}, tentativa {attempt})")
             r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
-
             if r.status_code == 429 and attempt <= max_retries:
                 wait = int(r.headers.get("Retry-After", "5"))
                 print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {wait}s…")
                 import time; time.sleep(wait)
                 continue
-
             if not r.ok:
                 print("[DEBUG][BATCH-DEL] STATUS:", r.status_code)
                 try: print("[DEBUG][BATCH-DEL] JSON:", r.json())
@@ -318,7 +329,7 @@ def delete_table_rows_by_index_batch(
                 if status not in (200, 204):
                     body = e.get("body") or {}
                     print("[DEBUG][BATCH-DEL] Falhou id", e.get("id"),
-                          "| status:", status, "| body:", body)
+                          "\n status:", status, "\n body:", body)
                     # mapeia id do lote -> o índice correspondente
                     try:
                         failed_idx = chunk[int(e.get("id")) - 1]
@@ -331,8 +342,8 @@ def delete_table_rows_by_index_batch(
     return {"deleted": deleted_total, "failed": sorted(set(failed_global), reverse=True)}
 
 # ---- Helpers para “sweep” final (recalcula índices e apaga 1 a 1)
-def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end):
-    """Volta a ler a tabela e devolve os índices (0-based) das rows do mês atual."""
+def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, empresa_idx=None, empresas_norm=None):
+    """Volta a ler a tabela e devolve os índices (0-based) das rows do mês atual (e opcionalmente das empresas permitidas)."""
     rows = list_table_rows(drive_id, item_id, table_name, session_id)
     indices = []
     for i, r in enumerate(rows):
@@ -340,19 +351,24 @@ def find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, 
         if len(vals) > date_idx:
             d = excel_value_to_date(vals[date_idx])
             if d and month_start <= d.date() <= month_end:
+                # se houver filtro por empresa, aplica
+                if empresa_idx is not None and empresas_norm is not None:
+                    emp_val = vals[empresa_idx] if len(vals) > empresa_idx else None
+                    if _norm_text(emp_val) not in empresas_norm:
+                        continue
                 indices.append(i)
     return indices
 
-def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, max_iters=5000):
+def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, empresa_idx=None, empresas_norm=None, max_iters=5000):
     """
-    Sweep final: enquanto existirem linhas do mês atual, apaga 1 a 1 (DELETE unitário).
+    Sweep final: enquanto existirem linhas do mês atual (e empresas permitidas, se indicado), apaga 1 a 1 (DELETE unitário).
     Útil para remover pendentes que falharam no $batch por drift de índice.
     """
     deleted = 0
     iters = 0
     while iters < max_iters:
         iters += 1
-        indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end)
+        indices = find_month_row_indices(drive_id, item_id, table_name, session_id, date_idx, month_start, month_end, empresa_idx, empresas_norm)
         if not indices:
             break
         # apaga a de MAIOR índice (mais seguro)
@@ -373,13 +389,14 @@ def cleanup_month_rows_sequential(drive_id, item_id, table_name, session_id, dat
     return deleted
 
 # ---- Fluxo principal ----
-site_id  = get_site_id()
+site_id = get_site_id()
 drive_id = get_drive_id(site_id)
-src_id   = get_item_id(drive_id, SRC_FILE_PATH)
-dst_id   = get_item_id(drive_id, DST_FILE_PATH)
 
-src_sid  = create_session(drive_id, src_id)
-dst_sid  = create_session(drive_id, dst_id)
+src_id = get_item_id(drive_id, SRC_FILE_PATH)
+dst_id = get_item_id(drive_id, DST_FILE_PATH)
+
+src_sid = create_session(drive_id, src_id)
+dst_sid = create_session(drive_id, dst_id)
 
 try:
     # Listar tabelas p/ debug
@@ -395,37 +412,49 @@ try:
     if DATE_COLUMN not in src_headers or DATE_COLUMN not in dst_headers:
         raise Exception(f"A coluna '{DATE_COLUMN}' não existe em uma das tabelas.")
 
+    # --- ### NOVO: validar coluna Empresa nas duas tabelas ---
+    if EMPRESA_COLUMN not in src_headers:
+        raise Exception(f"A coluna '{EMPRESA_COLUMN}' não existe na tabela de origem ({SRC_TABLE}).")
+    if EMPRESA_COLUMN not in dst_headers:
+        raise Exception(f"A coluna '{EMPRESA_COLUMN}' não existe na tabela de destino ({DST_TABLE}).")
+
     date_idx_src = src_headers.index(DATE_COLUMN)
     date_idx_dst = dst_headers.index(DATE_COLUMN)
+    empresa_idx_src = src_headers.index(EMPRESA_COLUMN)
+    empresa_idx_dst = dst_headers.index(EMPRESA_COLUMN)
 
     today = datetime.today() - timedelta(days=1)
     month_start, month_end = month_bounds(today)
     print(f"[DEBUG] Mês atual: {month_start} a {month_end}")
 
-    # --- Origens: filtrar mês atual e reordenar p/ o destino ---
+    # --- Origens: filtrar mês atual + empresas whitelist e reordenar p/ o destino ---
     src_rows = list_table_rows(drive_id, src_id, SRC_TABLE, src_sid)
     src_values = [r.get("values", [[]])[0] for r in src_rows]
+
     to_import = []
     for vals in src_values:
         d = excel_value_to_date(vals[date_idx_src])
-        if d and month_start <= d.date() <= month_end:
+        emp_val = vals[empresa_idx_src] if len(vals) > empresa_idx_src else None
+        if d and (month_start <= d.date() <= month_end) and is_empresa_permitida(emp_val):
             to_import.append(reorder_values_by_headers(src_headers, dst_headers, vals))
-    print(f"[DEBUG] Linhas a importar (mês): {len(to_import)}")
+
+    print(f"[DEBUG] Linhas a importar (mês + empresas whitelist): {len(to_import)}")
 
     if not to_import:
         print("Nada para importar.")
     else:
-        # --- Destino: índices a remover (mês atual) ---
+        # --- Destino: índices a remover (mês atual + empresas whitelist) ---
         dst_rows = list_table_rows(drive_id, dst_id, DST_TABLE, dst_sid)
         indices_to_delete = []
         for i, r in enumerate(dst_rows):  # i = índice 0-based no corpo da tabela
             vals = (r.get("values", [[]])[0] or [])
-            if len(vals) > date_idx_dst:
+            if len(vals) > max(date_idx_dst, empresa_idx_dst):
                 d = excel_value_to_date(vals[date_idx_dst])
-                if d and month_start <= d.date() <= month_end:
+                emp_val = vals[empresa_idx_dst]
+                if d and (month_start <= d.date() <= month_end) and is_empresa_permitida(emp_val):
                     indices_to_delete.append(i)
 
-        print(f"[DEBUG] Índices a apagar no destino (mês): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
+        print(f"[DEBUG] Índices a apagar no destino (mês + empresas whitelist): {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
 
         # --- Apagar via $batch + seq parcial (recolhe falhas) ---
@@ -436,18 +465,17 @@ try:
             )
             print(f"[OK] Removi {res['deleted']} linhas via $batch/seq parcial. Falharam {len(res['failed'])} no batch.")
 
-            # --- Sweep final: recalcula índices e apaga remanescentes do mês ---
-            sweep_deleted = cleanup_month_rows_sequential(
-                drive_id, dst_id, DST_TABLE, dst_sid, date_idx_dst, month_start, month_end
-            )
-            print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
-        else:
-            print("[DEBUG] Nenhuma linha do mês encontrada para apagar no destino.")
+        # --- Sweep final: recalcula índices e apaga remanescentes do mês + empresas whitelist ---
+        sweep_deleted = cleanup_month_rows_sequential(
+            drive_id, dst_id, DST_TABLE, dst_sid,
+            date_idx_dst, month_start, month_end,
+            empresa_idx=empresa_idx_dst, empresas_norm=set(_EMPRESAS_NORM.keys())
+        )
+        print(f"[OK] Sweep final removeu {sweep_deleted} linhas do mês (pendentes).")
 
-        # --- Inserir novas linhas do mês atual ---
+        # --- Inserir novas linhas do mês atual (apenas empresas whitelist) ---
         add_rows(drive_id, dst_id, DST_TABLE, dst_sid, to_import)
         print(f"[OK] Inseridas {len(to_import)} linhas do mês atual no destino.")
-
 finally:
     close_session(drive_id, src_id, src_sid)
     close_session(drive_id, dst_id, dst_sid)
