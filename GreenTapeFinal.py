@@ -35,7 +35,7 @@ CSV_DEST_PATH = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
 
 # ---- COLUNAS FINAIS ----
 DST_COLUMNS = [
-    "ref_visita","estado","data_registo","data_enc","data_entrega","gsi","gsi_zona","empresa",
+    "ref_visita","estado","data_registo","data_enc","data_entrega","gsi","empresa",
     "apresentacao","ref_farmacia","nome_farmacia","anf","segmentacao_otc","morada",
     "cp","cp_ext","distrito","concelho","freguesia","localidade","grupos","armazem",
     "armazenista","cod_produto","cod_sap_produto","biu_hmr","email","nome_facturar",
