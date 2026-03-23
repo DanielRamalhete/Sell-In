@@ -159,7 +159,7 @@ def build_merged_dataframe():
 
 # ========================== NORMALIZAÇÃO ======================
 def _norm(s):
-    s = str(s).lower().replace("refª","ref").replace("ref.","ref").replace("dim","gsi")
+    s = str(s).lower().replace("refª","ref").replace("ref.","ref").replace("gsi_zona","gsi")
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^\w]+","_",s).strip("_")
@@ -178,7 +178,7 @@ def build_dataframe_for_dst(df):
 def apply_empresa_wbrands_rule(df):
     df = df.copy()
     mask = df["empresa"].astype(str).str.upper() == "WBRANDS"
-    tokens = df.loc[mask, "apresentacao"].fillna("").astype(str).strip().str.split().str[0]
+    tokens = df.loc[mask, "apresentacao"].fillna("").astype(str).str.strip().str.split().str[0]
     df.loc[mask & tokens.ne(""), "empresa"] = tokens[tokens.ne("")]
     return df
 
