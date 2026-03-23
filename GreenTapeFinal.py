@@ -1,10 +1,10 @@
 # ========================== IMPORTS ==========================
-import os, json, requests, msal 
-import pandas as pd 
-import unicodedata 
-import re 
-import time 
-import math 
+import os, json, requests, msal
+import pandas as pd
+import unicodedata
+import re
+import time
+import math
 
 # ========================== GRAPH BASE =======================
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -43,13 +43,12 @@ DST_COLUMNS = [
     "bonus_caixa_confirmado","desconto_percentagem","net","gross"
 ]
 
-# ========================== AUTENTICAÇÃO =====================
+# ========================== AUTENTICAÇÃO ======================
 app = msal.ConfidentialClientApplication(
     CLIENT_ID,
     authority=f"https://login.microsoftonline.com/{TENANT_ID}",
     client_credential=CLIENT_SECRET
 )
-
 token = app.acquire_token_for_client(
     scopes=["https://graph.microsoft.com/.default"]
 )["access_token"]
@@ -94,9 +93,11 @@ def close_session(drive_id, item_id, session_id):
         headers=h
     )
 
+
 # ========================== UTILIDADES ========================
 def _session_headers(session_id):
-    h = dict(base_headers); h["workbook-session-id"] = session_id
+    h = dict(base_headers)
+    h["workbook-session-id"] = session_id
     return h
 
 def get_ids_for_path(site_id, path):
@@ -105,19 +106,24 @@ def get_ids_for_path(site_id, path):
 
 def read_table(drive_id, item_id, session_id, table):
     h = _session_headers(session_id)
+
     hdr = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
         headers=h
     ).json()["values"][0]
+
     body = requests.get(
         f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange",
         headers=h
     ).json().get("values", [])
+
     return pd.DataFrame(body, columns=hdr)
+
 
 # ========================== MERGES ============================
 def build_merged_dataframe():
     site_id = get_site_id()
+
     ast_drive, ast_item = get_ids_for_path(site_id, AST_FILE_PATH)
     cst_drive, cst_item = get_ids_for_path(site_id, CST_FILE_PATH)
 
@@ -129,14 +135,27 @@ def build_merged_dataframe():
         df_bst = read_table(ast_drive, ast_item, sess_ast, BST_TABLE)
         df_cst = read_table(cst_drive, cst_item, sess_cst, CST_TABLE)
 
-        return (
+        # ----- MERGE ORIGINAL -----
+        df = (
             df_ast
-               .merge(df_bst, how="left", left_on="Refª Visita", right_on="Refª")
-               .merge(df_cst, how="left", left_on="Ref. Farmácia", right_on="Ref")
+            .merge(df_bst, how="left", left_on="Refª Visita", right_on="Refª")
+            .merge(df_cst, how="left", left_on="Ref. Farmácia", right_on="Ref")
         )
+
+        # ----- REMOVER DIM DA BST -----
+        df = df.drop(columns=[c for c in df.columns if c.lower() == "dim"], errors="ignore")
+
+        # ----- GARANTIR GSI DA TABELA PAINEL -----
+        gsi_col = [c for c in df.columns if c.lower() == "gsi"]
+        if gsi_col:
+            df["gsi"] = df[gsi_col[0]]
+
+        return df
+
     finally:
         close_session(ast_drive, ast_item, sess_ast)
         close_session(cst_drive, cst_item, sess_cst)
+
 
 # ========================== NORMALIZAÇÃO ======================
 def _norm(s):
@@ -154,13 +173,15 @@ def build_dataframe_for_dst(df):
                 break
     return df.rename(columns=ren).reindex(columns=DST_COLUMNS)
 
+
 # ========================== REGRA WBRANDS ======================
 def apply_empresa_wbrands_rule(df):
     df = df.copy()
     mask = df["empresa"].astype(str).str.upper() == "WBRANDS"
-    tokens = df.loc[mask, "apresentacao"].fillna("").astype(str).str.strip().str.split().str[0]
+    tokens = df.loc[mask, "apresentacao"].fillna("").astype(str).strip().str.split().str[0]
     df.loc[mask & tokens.ne(""), "empresa"] = tokens[tokens.ne("")]
     return df
+
 
 # ========================== DATAS ==============================
 def convert_excel_serial_dates(df, cols):
@@ -171,6 +192,7 @@ def convert_excel_serial_dates(df, cols):
         if numeric.notna().sum() == 0: continue
         df[col] = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
     return df
+
 
 # ========================== JSON SAFE ==========================
 def normalize_cell_for_json(v):
@@ -184,38 +206,36 @@ def normalize_cell_for_json(v):
     if isinstance(v, (str,int)): return v
     return str(v)
 
+
 # ========================== WRITE TABLE ========================
 def clear_and_write_table(drive_id, item_id, table, df):
     sess = create_session(drive_id, item_id)
     h = _session_headers(sess)
 
     try:
-        # headers
         requests.patch(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/headerRowRange",
             headers=h, json={"values":[list(df.columns)]}
         ).raise_for_status()
 
-        # clear
         requests.post(
             f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/dataBodyRange/clear",
             headers=h, json={"applyTo":"all"}
         ).raise_for_status()
 
-        # add data
         rows = [
             [normalize_cell_for_json(v) for v in row]
             for row in df.values.tolist()
         ]
 
         url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table}/rows/add"
-
         for i in range(0, len(rows), 1000):
             requests.post(url, headers=h, json={"values": rows[i:i+1000]}).raise_for_status()
             time.sleep(0.2)
 
     finally:
         close_session(drive_id, item_id, sess)
+
 
 # ========================== CSV ================================
 def dataframe_to_csv_bytes(df, sep=","):
@@ -229,6 +249,7 @@ def upload_csv_to_sharepoint(csv_bytes, dest_path):
     h = dict(base_headers); h["Content-Type"] = "text/csv; charset=utf-8"
     requests.put(url, headers=h, data=csv_bytes).raise_for_status()
 
+
 # ========================== PIPELINE FINAL =====================
 def build_and_write_to_dst():
     df = build_merged_dataframe()
@@ -236,14 +257,10 @@ def build_and_write_to_dst():
     df = apply_empresa_wbrands_rule(df)
     df = convert_excel_serial_dates(df, ["data_registo","data_enc","data_entrega"])
 
-    # >>> NORMALIZAR PARA APENAS DATA <<<
     for col in ["data_registo","data_enc","data_entrega"]:
         if col in df.columns:
             df[col] = df[col].dt.date
 
-    # ==========================================================
-    #         FILTRO FINAL PARA APENAS ESTAS EMPRESAS
-    # ==========================================================
     EMPRESAS_WHITELIST = {
         "bbraun","dr. scholl's","infacol","kelo.cell","lifergy",
         "medela","monchique","moskout","pranarom","roche",
@@ -259,18 +276,17 @@ def build_and_write_to_dst():
 
     print(f"🔎 Filtro Empresas: Removidas {before-after} linhas. Total final: {after}")
 
-    # ---- Escrever Excel ----
     site_id = get_site_id()
     dst_drive, dst_item = get_ids_for_path(site_id, DST_FILE_PATH)
     clear_and_write_table(dst_drive, dst_item, DST_TABLE, df)
 
-    # ---- Exportar CSV ----
     upload_csv_to_sharepoint(
         dataframe_to_csv_bytes(df, sep=","),
         CSV_DEST_PATH
     )
 
     print(f"✅ Concluído: {after} linhas processadas — Excel + CSV atualizados.")
+
 
 # ========================== ENTRYPOINT =========================
 if __name__ == "__main__":
