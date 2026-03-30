@@ -1,5 +1,4 @@
-
-import os, json, requests, msal
+import os, json, requests, msal, time
 from datetime import datetime, timedelta
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -20,11 +19,11 @@ DST_TABLE      = "Historico"
 DATE_COLUMN    = "Data da visita"
 
 # Paginação e sweep (podes alterar via ENV)
-DEFAULT_TOP           = int(os.getenv("GRAPH_ROWS_TOP") or "5000")   # leitura paginada
-DEFAULT_SWEEP_GROUP   = int(os.getenv("SWEEP_GROUP_SIZE") or "500")  # sweep final em grupos
+DEFAULT_TOP           = int(os.getenv("GRAPH_ROWS_TOP") or "5000")
+DEFAULT_SWEEP_GROUP   = int(os.getenv("SWEEP_GROUP_SIZE") or "500")
 
 # Importação em chunks (ENV)
-IMPORT_CHUNK_SIZE     = int(os.getenv("IMPORT_CHUNK_SIZE") or "2000")    # rows por POST /rows/add
+IMPORT_CHUNK_SIZE     = int(os.getenv("IMPORT_CHUNK_SIZE") or "2000")
 IMPORT_MAX_RETRIES    = int(os.getenv("IMPORT_MAX_RETRIES") or "3")
 IMPORT_USE_BATCH      = (os.getenv("IMPORT_USE_BATCH") or "false").lower() == "true"
 # ==========================
@@ -48,10 +47,45 @@ def get_drive_id(site_id):
 def get_item_id(drive_id, path):
     return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
 
-def create_session(drive_id, item_id):
-    r = requests.post(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession",
-                      headers=base_headers, data=json.dumps({"persistChanges": True}))
-    return r.json()["id"]
+def create_session(drive_id, item_id, max_retries=5):
+    """
+    Opens a workbook session with retry logic for throttling (429) and transient
+    failures (e.g. 423 Locked from a previous crashed run, 503, 504).
+    Logs the full API error body before raising so the root cause is visible in CI.
+    """
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession"
+    for attempt in range(1, max_retries + 1):
+        r = requests.post(url, headers=base_headers, data=json.dumps({"persistChanges": True}))
+        body = {}
+        try:
+            body = r.json()
+        except Exception:
+            body = {"raw": r.text}
+
+        # 429 – throttled: respect Retry-After header
+        if r.status_code == 429:
+            wait = int(r.headers.get("Retry-After", "10"))
+            print(f"[create_session] 429 throttled. Waiting {wait}s (attempt {attempt}/{max_retries})")
+            time.sleep(wait)
+            continue
+
+        # Success
+        if r.ok and "id" in body:
+            return body["id"]
+
+        # Any other failure: log clearly and back off before retrying
+        print(f"[create_session] FAILED. Status: {r.status_code} | item_id: {item_id}")
+        print(f"[create_session] Response body: {body}")
+
+        if attempt < max_retries:
+            wait = 2 ** attempt  # exponential backoff: 2, 4, 8, 16s
+            print(f"[create_session] Retrying in {wait}s… (attempt {attempt}/{max_retries})")
+            time.sleep(wait)
+        else:
+            raise RuntimeError(
+                f"createSession failed after {max_retries} attempts for item_id={item_id}. "
+                f"Last status: {r.status_code} | Last response: {body}"
+            )
 
 def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
@@ -141,14 +175,10 @@ def get_table_headers_safe(drive_id, item_id, table_name, session_id):
         try: print("[DEBUG] /range JSON:", rr.json())
         except Exception: print("[DEBUG] /range TEXT:", rr.text)
 
-    rr.raise_for_status()  # força erro p/ ver detalhe
+    rr.raise_for_status()
 
 # ---- Listar rows com paginação ($top/$skip)
 def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, max_pages=100000):
-    """
-    Itera páginas usando $top/$skip para evitar 'ResponsePayloadSizeLimitExceeded'.
-    Cada item tem 'index' (0-based na Tabela) e 'values'.
-    """
     if top is None:
         top = DEFAULT_TOP
 
@@ -180,11 +210,6 @@ def list_table_rows_paged(drive_id, item_id, table_name, session_id, top=None, m
 # ---- Inserir rows (importação repartida)
 def add_rows_chunked_sequential(drive_id, item_id, table_name, session_id, values_2d,
                                 chunk_size=IMPORT_CHUNK_SIZE, max_retries=IMPORT_MAX_RETRIES):
-    """
-    Adiciona rows em CHUNKS sequenciais ao fim da Tabela (preserva ordem).
-    Trata 429 (Retry-After) e reduz chunk_size se payload exceder limite.
-    Doc recomenda inserir várias rows numa chamada 'rows/add' e experimentar nº ideal. [1](https://learn.microsoft.com/en-us/graph/api/tablerowcollection-add?view=graph-rest-1.0)
-    """
     if not values_2d:
         return 0
 
@@ -192,18 +217,15 @@ def add_rows_chunked_sequential(drive_id, item_id, table_name, session_id, value
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add"
     total = 0; start = 0; n = len(values_2d)
 
-    # função p/ enviar um chunk
     def post_chunk(vals, attempt=1):
         body = {"index": None, "values": vals}
         print(f"[DEBUG][ADD-CHUNK] POST {url} rows={len(vals)} attempt={attempt} chunk_size={chunk_size}")
         r = requests.post(url, headers=h, data=json.dumps(body))
-        # 429 throttling
         if r.status_code == 429:
             ra = int(r.headers.get("Retry-After", "5"))
-            print(f"[DEBUG][ADD-CHUNK] 429 TooManyRequests. A aguardar {ra}s…")  # boas práticas throttling. [2](https://learn.microsoft.com/en-us/graph/throttling)
-            import time; time.sleep(ra)
+            print(f"[DEBUG][ADD-CHUNK] 429 TooManyRequests. A aguardar {ra}s…")
+            time.sleep(ra)
             return post_chunk(vals, attempt+1 if attempt <= max_retries else attempt)
-        # payload demasiado grande → reduzir chunk
         if not r.ok:
             try:
                 err = r.json()
@@ -214,16 +236,13 @@ def add_rows_chunked_sequential(drive_id, item_id, table_name, session_id, value
             inner_code = inner.get("code", "") or ""
             if (str(code).lower() in ("responsepayloadsizelimitexceeded","requestentitytoolarge")
                 or str(inner_code).lower() in ("responsepayloadsizelimitexceeded","requestentitytoolarge")):
-                # reduzir chunk e tentar de novo
                 new_size = max(100, len(vals) // 2)
-                print(f"[DEBUG][ADD-CHUNK] Payload grande. A dividir o chunk {len(vals)}→{new_size}.")  # reduzir payload. [4](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/performance)[5](https://stackoverflow.com/questions/61168748/how-to-ensure-that-excel-online-request-is-less-than-5mb-using-office-javascript)
-                # dividir e enviar em duas metades
+                print(f"[DEBUG][ADD-CHUNK] Payload grande. A dividir o chunk {len(vals)}→{new_size}.")
                 mid = len(vals) // 2
                 c1, c2 = vals[:mid], vals[mid:]
                 ok1 = post_chunk(c1, attempt+1 if attempt <= max_retries else attempt)
                 ok2 = post_chunk(c2, attempt+1 if attempt <= max_retries else attempt)
                 return ok1 and ok2
-            # 504 ocasional → repetir (doc). [1](https://learn.microsoft.com/en-us/graph/api/tablerowcollection-add?view=graph-rest-1.0)
             if r.status_code == 504 and attempt <= max_retries:
                 print("[DEBUG][ADD-CHUNK] 504 Gateway Timeout. A repetir…")
                 return post_chunk(vals, attempt+1)
@@ -240,7 +259,6 @@ def add_rows_chunked_sequential(drive_id, item_id, table_name, session_id, value
             print(f"[DEBUG][ADD-CHUNK] OK ({len(chunk)}) total={total}/{n}")
             start = end
         else:
-            # se falhar sem exceção, avança para evitar loop (r.raise_for_status já aborta)
             start = end
 
     print(f"[DEBUG][ADD-CHUNK] Inseridas (sequencial): {total}")
@@ -248,10 +266,6 @@ def add_rows_chunked_sequential(drive_id, item_id, table_name, session_id, value
 
 def add_rows_chunked_batch(drive_id, item_id, table_name, session_id, values_2d,
                            chunk_size=IMPORT_CHUNK_SIZE, max_retries=IMPORT_MAX_RETRIES):
-    """
-    (Opcional) Adiciona rows em CHUNKS via $batch (até 20 subpedidos).
-    Atenção: ordem de execução dentro do batch **não é garantida**; se precisas preservá-la, usa o modo sequencial. [3](https://learn.microsoft.com/en-us/graph/sdks/batch-requests)
-    """
     if not values_2d:
         return 0
     batch_endpoint = f"{GRAPH_BASE}/$batch"
@@ -265,8 +279,7 @@ def add_rows_chunked_batch(drive_id, item_id, table_name, session_id, values_2d,
         end = min(start + chunk_size, n)
         big_chunk = values_2d[start:end]
         print(f"[DEBUG][ADD-BATCH] Preparar chunk rows={len(big_chunk)}")
-        # subdividir o big_chunk em sub-chunks (um add por subpedido)
-        subchunks = list(chunks(big_chunk, max(len(big_chunk)//20, 100)))  # tentativa: ~20 pedidos
+        subchunks = list(chunks(big_chunk, max(len(big_chunk)//20, 100)))
         requests_list = []
         for i, sc in enumerate(subchunks, start=1):
             rel_url = f"/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/rows/add"
@@ -281,11 +294,10 @@ def add_rows_chunked_batch(drive_id, item_id, table_name, session_id, values_2d,
         print(f"[DEBUG][ADD-BATCH] POST {batch_endpoint} subpedidos={len(requests_list)}")
 
         r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
-        # throttling no batch: aplicar Retry-After e repetir (boas práticas). [6](https://stackoverflow.com/questions/71999165/how-to-handle-throttling-of-microsoft-graph-in-powershell)
         if r.status_code == 429 and max_retries > 0:
             ra = int(r.headers.get("Retry-After", "5"))
             print(f"[DEBUG][ADD-BATCH] 429 no batch. A aguardar {ra}s e repetir…")
-            import time; time.sleep(ra)
+            time.sleep(ra)
             r = requests.post(batch_endpoint, headers=base_headers, data=json.dumps(payload))
 
         if not r.ok:
@@ -296,7 +308,6 @@ def add_rows_chunked_batch(drive_id, item_id, table_name, session_id, values_2d,
 
         resp = r.json()
         ok_count = sum(1 for e in resp.get("responses", []) if e.get("status") in (200, 204))
-        # somar o nº de rows efetivamente inseridas (aproximação: soma dos subchunks OK)
         inserted = sum(len(subchunks[int(e.get("id"))-1]) for e in resp.get("responses", []) if e.get("status") in (200, 204))
         total += inserted
         for e in resp.get("responses", []):
@@ -308,7 +319,7 @@ def add_rows_chunked_batch(drive_id, item_id, table_name, session_id, values_2d,
     print(f"[DEBUG][ADD-BATCH] Inseridas (batch): {total}")
     return total
 
-# ---- Outras helpers (eliminação já implementada anteriormente)
+# ---- Outras helpers
 def get_table_range(drive_id, item_id, table_name, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/tables/{table_name}/range"
@@ -372,7 +383,7 @@ def parse_range_address(address: str):
         "end_row": int(m2.group(2))
     }
 
-# ---- DELETE via $batch (ItemAt) + sweep em grupos (mantido do teu fluxo anterior)
+# ---- DELETE via $batch (ItemAt) + sweep em grupos
 def delete_table_rows_by_index_batch(
     drive_id, item_id, table_name, session_id, row_indices,
     max_batch_size=20, max_retries=3, fallback_sequential=False
@@ -427,8 +438,8 @@ def delete_table_rows_by_index_batch(
 
             if r.status_code == 429 and attempt <= max_retries:
                 ra = int(r.headers.get("Retry-After", "5"))
-                print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {ra}s…")  # throttling/backoff. [2](https://learn.microsoft.com/en-us/graph/throttling)
-                import time; time.sleep(ra)
+                print(f"[DEBUG][BATCH-DEL] 429 recebido. A aguardar {ra}s…")
+                time.sleep(ra)
                 continue
 
             if not r.ok:
@@ -519,11 +530,9 @@ src_sid  = create_session(drive_id, src_id)
 dst_sid  = create_session(drive_id, dst_id)
 
 try:
-    # Listar tabelas p/ debug
     _ = list_tables(drive_id, src_id, src_sid)
     _ = list_tables(drive_id, dst_id, dst_sid)
 
-    # Obter cabeçalhos com fallback
     src_headers = get_table_headers_safe(drive_id, src_id, SRC_TABLE, src_sid)
     dst_headers = get_table_headers_safe(drive_id, dst_id, DST_TABLE, dst_sid)
     print("[DEBUG] src_headers:", src_headers)
@@ -539,7 +548,6 @@ try:
     month_start, month_end = month_bounds(today)
     print(f"[DEBUG] Mês atual: {month_start} a {month_end}")
 
-    # --- Origens: filtrar mês atual e reordenar p/ o destino (paginação) ---
     to_import = []
     for r in list_table_rows_paged(drive_id, src_id, SRC_TABLE, src_sid, top=DEFAULT_TOP):
         vals = (r.get("values", [[]])[0] or [])
@@ -553,7 +561,6 @@ try:
     if not to_import:
         print("Nada para importar.")
     else:
-        # --- Destino: índices a remover (mês atual) ---
         indices_to_delete = []
         for r in list_table_rows_paged(drive_id, dst_id, DST_TABLE, dst_sid, top=DEFAULT_TOP):
             idx = r.get("index")
@@ -567,7 +574,6 @@ try:
         print(f"[DEBUG] Total índices a apagar: {len(indices_to_delete)}")
         print(f"[DEBUG] Amostra índices: {indices_to_delete[:50]}{' ...' if len(indices_to_delete)>50 else ''}")
 
-        # --- Apagar via $batch + sweep em grupos (rápido/eficiente) ---
         if indices_to_delete:
             res = delete_table_rows_by_index_batch(
                 drive_id, dst_id, DST_TABLE, dst_sid, indices_to_delete,
@@ -583,7 +589,6 @@ try:
         else:
             print("[DEBUG] Nenhuma linha do mês encontrada para apagar no destino.")
 
-        # --- Inserir novas linhas do mês atual (REPARTIDO) ---
         if IMPORT_USE_BATCH:
             inserted = add_rows_chunked_batch(
                 drive_id, dst_id, DST_TABLE, dst_sid, to_import,
