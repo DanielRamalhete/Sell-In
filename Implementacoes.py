@@ -47,11 +47,11 @@ def get_drive_id(site_id):
 def get_item_id(drive_id, path):
     return requests.get(f"{GRAPH_BASE}/drives/{drive_id}/root:{path}", headers=base_headers).json()["id"]
 
-def create_session(drive_id, item_id, max_retries=5):
+def create_session(drive_id, item_id, max_retries=8):
     """
-    Opens a workbook session with retry logic for throttling (429) and transient
-    failures (e.g. 423 Locked from a previous crashed run, 503, 504).
-    Logs the full API error body before raising so the root cause is visible in CI.
+    Opens a workbook session with retry logic.
+    504 on createSession means the file is taking too long to load in Excel Online —
+    use longer waits between retries rather than short exponential backoff.
     """
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/workbook/createSession"
     for attempt in range(1, max_retries + 1):
@@ -71,14 +71,27 @@ def create_session(drive_id, item_id, max_retries=5):
 
         # Success
         if r.ok and "id" in body:
+            print(f"[create_session] OK on attempt {attempt}")
             return body["id"]
 
-        # Any other failure: log clearly and back off before retrying
+        # 504 – file taking too long to load: wait longer between retries
+        if r.status_code == 504:
+            # Use longer fixed waits: 30s, 60s, 60s, 90s, 90s, 120s, 120s...
+            wait_schedule = [30, 60, 60, 90, 90, 120, 120]
+            wait = wait_schedule[min(attempt - 1, len(wait_schedule) - 1)]
+            print(f"[create_session] 504 Gateway Timeout (file loading too slowly). "
+                  f"Waiting {wait}s before retry (attempt {attempt}/{max_retries})")
+            print(f"[create_session] item_id: {item_id} | error: {body}")
+            if attempt < max_retries:
+                time.sleep(wait)
+            continue
+
+        # Any other failure
         print(f"[create_session] FAILED. Status: {r.status_code} | item_id: {item_id}")
         print(f"[create_session] Response body: {body}")
 
         if attempt < max_retries:
-            wait = 2 ** attempt  # exponential backoff: 2, 4, 8, 16s
+            wait = 2 ** attempt
             print(f"[create_session] Retrying in {wait}s… (attempt {attempt}/{max_retries})")
             time.sleep(wait)
         else:
@@ -86,6 +99,8 @@ def create_session(drive_id, item_id, max_retries=5):
                 f"createSession failed after {max_retries} attempts for item_id={item_id}. "
                 f"Last status: {r.status_code} | Last response: {body}"
             )
+
+    raise RuntimeError(f"createSession exhausted {max_retries} attempts for item_id={item_id}.")
 
 def close_session(drive_id, item_id, session_id):
     h = dict(base_headers); h["workbook-session-id"] = session_id
