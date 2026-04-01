@@ -1,4 +1,4 @@
-name: Teste
+name: Histórico Sell In
 
 on:
   # Continua a permitir execução manual
@@ -34,4 +34,4 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           SITE_HOSTNAME: ${{ secrets.SITE_HOSTNAME }}
           SITE_PATH: ${{ secrets.SITE_PATH }}
-        run: python Teste.py
+        run: python Historico_Sell_In.py
