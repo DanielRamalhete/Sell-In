@@ -9,7 +9,7 @@ SITE_HOSTNAME = os.getenv("SITE_HOSTNAME")
 SITE_PATH     = os.getenv("SITE_PATH")
 
 SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
-SRC_SHEET     = "TabelaAutomatica"
+SRC_SHEET     = 1
 
 DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
 DST_SHEET     = "Historico"
