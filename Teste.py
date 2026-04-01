@@ -12,7 +12,7 @@ SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.
 SRC_SHEET     = 1
 
 DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
-DST_SHEET     = "Historico"
+DST_SHEET     = 1
 
 DATE_COLUMN   = "Data Entrega"
 # ==========================
