@@ -1,4 +1,4 @@
-import os, io, requests, msal, openpyxl, pandas as pd
+import os, io, requests, msal, pandas as pd, openpyxl
 from datetime import datetime, timedelta
 
 # ========= CONFIG =========
@@ -9,12 +9,17 @@ SITE_HOSTNAME = os.getenv("SITE_HOSTNAME")
 SITE_PATH     = os.getenv("SITE_PATH")
 
 SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.xlsx"
-SRC_SHEET     = 1
-
 DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
-DST_SHEET     = 1
 
-DATE_COLUMN   = "Data Entrega"
+# Sheet names - hardcode after confirming from logs
+SRC_SHEET0 = "Sheet0_src_name"
+SRC_SHEET1 = "Sheet1_src_name"
+DST_SHEET0 = "Sheet0_dst_name"
+DST_SHEET1 = "Sheet1_dst_name"
+
+DATE_COLUMN    = "Data Entrega"
+SRC_JOIN_COL   = "Refª Visita"   # in Sheet 1
+DST_JOIN_COL   = "Refª"          # in Sheet 0
 # ==========================
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -66,18 +71,14 @@ def upload_file(drive_id, item_id, content: bytes):
 
 # ---- Two month bounds ----
 def two_month_bounds(d: datetime):
-    # End = last day of current month
     if d.month == 12:
         last = datetime(d.year + 1, 1, 1).date() - timedelta(days=1)
     else:
         last = datetime(d.year, d.month + 1, 1).date() - timedelta(days=1)
-
-    # Start = first day of previous month
     if d.month == 1:
         first = datetime(d.year - 1, 12, 1).date()
     else:
         first = datetime(d.year, d.month - 1, 1).date()
-
     return first, last
 
 # ---- Main flow ----
@@ -97,56 +98,88 @@ src_bytes = download_file(drive_id, src_id)
 print("Downloading destination file...")
 dst_bytes = download_file(drive_id, dst_id)
 
-wb_src = openpyxl.load_workbook(io.BytesIO(src_bytes), read_only=True)
-wb_dst = openpyxl.load_workbook(io.BytesIO(dst_bytes), read_only=True)
-SRC_SHEET = wb_src.sheetnames[1]  # second sheet
-DST_SHEET = wb_dst.sheetnames[1]  # second sheet
-print("Source sheet:", SRC_SHEET)
-print("Destination sheet:", DST_SHEET)
-wb_src.close()
-wb_dst.close()
+# ================================================================
+# SHEET 1 (already working logic)
+# ================================================================
+print("\n--- Processing Sheet 1 ---")
+df_src1 = pd.read_excel(io.BytesIO(src_bytes), sheet_name=SRC_SHEET1, engine="openpyxl")
+df_dst1 = pd.read_excel(io.BytesIO(dst_bytes), sheet_name=DST_SHEET1, engine="openpyxl")
 
-# Load into pandas
-print("Loading into pandas...")
-df_src = pd.read_excel(io.BytesIO(src_bytes), sheet_name=SRC_SHEET, engine="openpyxl")
-df_dst = pd.read_excel(io.BytesIO(dst_bytes), sheet_name=DST_SHEET, engine="openpyxl")
+print(f"Source Sheet1 rows: {len(df_src1)}")
+print(f"Destination Sheet1 rows (before): {len(df_dst1)}")
 
-print(f"Source rows: {len(df_src)}")
-print(f"Destination rows (before): {len(df_dst)}")
+df_src1[DATE_COLUMN] = pd.to_datetime(df_src1[DATE_COLUMN], dayfirst=True, errors="coerce")
+df_dst1[DATE_COLUMN] = pd.to_datetime(df_dst1[DATE_COLUMN], dayfirst=True, errors="coerce")
 
-# Ensure date column is datetime
-df_src[DATE_COLUMN] = pd.to_datetime(df_src[DATE_COLUMN], dayfirst=True, errors="coerce")
-df_dst[DATE_COLUMN] = pd.to_datetime(df_dst[DATE_COLUMN], dayfirst=True, errors="coerce")
+mask_src1 = (df_src1[DATE_COLUMN].dt.date >= month_start) & (df_src1[DATE_COLUMN].dt.date <= month_end)
+to_import1 = df_src1[mask_src1].copy()
+print(f"Rows to import Sheet1 (two months): {len(to_import1)}")
 
-# Filter source to two month window
-mask_src = (df_src[DATE_COLUMN].dt.date >= month_start) & (df_src[DATE_COLUMN].dt.date <= month_end)
-to_import = df_src[mask_src].copy()
-print(f"Rows to import from source (two months): {len(to_import)}")
-
-if to_import.empty:
-    print("Nothing to import. Exiting.")
+if to_import1.empty:
+    print("Sheet1: Nothing to import.")
+    df_final1 = df_dst1
 else:
-    # Reorder source columns to match destination
-    to_import = to_import.reindex(columns=df_dst.columns)
+    to_import1 = to_import1.reindex(columns=df_dst1.columns)
+    mask_dst1 = (df_dst1[DATE_COLUMN].dt.date >= month_start) & (df_dst1[DATE_COLUMN].dt.date <= month_end)
+    df_dst1 = df_dst1[~mask_dst1]
+    df_final1 = pd.concat([df_dst1, to_import1], ignore_index=True)
+    print(f"Destination Sheet1 rows after import: {len(df_final1)}")
 
-    # Remove two month window rows from destination
-    mask_dst = (df_dst[DATE_COLUMN].dt.date >= month_start) & (df_dst[DATE_COLUMN].dt.date <= month_end)
-    df_dst = df_dst[~mask_dst]
-    print(f"Destination rows after removing two month window: {len(df_dst)}")
+# ================================================================
+# SHEET 0
+# ================================================================
+print("\n--- Processing Sheet 0 ---")
+df_src0 = pd.read_excel(io.BytesIO(src_bytes), sheet_name=SRC_SHEET0, engine="openpyxl")
+df_dst0 = pd.read_excel(io.BytesIO(dst_bytes), sheet_name=DST_SHEET0, engine="openpyxl")
 
-    # Append new rows
-    df_final = pd.concat([df_dst, to_import], ignore_index=True)
-    print(f"Destination rows after import: {len(df_final)}")
+print(f"Source Sheet0 rows: {len(df_src0)}")
+print(f"Destination Sheet0 rows (before): {len(df_dst0)}")
 
-    # Write back to xlsx in memory
-    print("Writing updated file to memory...")
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_final.to_excel(writer, sheet_name=DST_SHEET, index=False)
-    output.seek(0)
-    updated_bytes = output.read()
+# Build date lookup from Sheet 1 source: one Data Entrega per Refª Visita
+date_lookup = (
+    df_src1[[SRC_JOIN_COL, DATE_COLUMN]]
+    .dropna(subset=[SRC_JOIN_COL])
+    .drop_duplicates(subset=[SRC_JOIN_COL], keep="first")
+    .rename(columns={SRC_JOIN_COL: DST_JOIN_COL})  # align key name to Sheet 0
+)
 
-    # Upload back to SharePoint
-    print("Uploading updated file to SharePoint...")
-    upload_file(drive_id, dst_id, updated_bytes)
-    print(f"Done. {len(to_import)} rows imported, {mask_dst.sum()} old rows replaced.")
+# Temporarily join Data Entrega into Sheet 0
+df_src0 = df_src0.merge(date_lookup, on=DST_JOIN_COL, how="left")
+df_dst0 = df_dst0.merge(date_lookup, on=DST_JOIN_COL, how="left")
+
+df_src0[DATE_COLUMN] = pd.to_datetime(df_src0[DATE_COLUMN], dayfirst=True, errors="coerce")
+df_dst0[DATE_COLUMN] = pd.to_datetime(df_dst0[DATE_COLUMN], dayfirst=True, errors="coerce")
+
+mask_src0 = (df_src0[DATE_COLUMN].dt.date >= month_start) & (df_src0[DATE_COLUMN].dt.date <= month_end)
+to_import0 = df_src0[mask_src0].copy()
+print(f"Rows to import Sheet0 (two months): {len(to_import0)}")
+
+if to_import0.empty:
+    print("Sheet0: Nothing to import.")
+    df_final0 = df_dst0.drop(columns=[DATE_COLUMN])
+else:
+    # Drop Data Entrega before writing — not permanent in Sheet 0
+    original_cols0 = [c for c in df_dst0.columns if c != DATE_COLUMN]
+    to_import0 = to_import0[original_cols0]
+
+    mask_dst0 = (df_dst0[DATE_COLUMN].dt.date >= month_start) & (df_dst0[DATE_COLUMN].dt.date <= month_end)
+    df_dst0 = df_dst0[~mask_dst0]
+    df_dst0 = df_dst0.drop(columns=[DATE_COLUMN])
+
+    df_final0 = pd.concat([df_dst0, to_import0], ignore_index=True)
+    print(f"Destination Sheet0 rows after import: {len(df_final0)}")
+
+# ================================================================
+# Write both sheets back to the destination file and upload
+# ================================================================
+print("\nWriting updated file to memory...")
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    df_final0.to_excel(writer, sheet_name=DST_SHEET0, index=False)
+    df_final1.to_excel(writer, sheet_name=DST_SHEET1, index=False)
+output.seek(0)
+updated_bytes = output.read()
+
+print("Uploading updated file to SharePoint...")
+upload_file(drive_id, dst_id, updated_bytes)
+print("Done.")
