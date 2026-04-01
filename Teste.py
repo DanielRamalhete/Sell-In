@@ -98,6 +98,10 @@ src_bytes = download_file(drive_id, src_id)
 print("Downloading destination file...")
 dst_bytes = download_file(drive_id, dst_id)
 
+wb_dst = openpyxl.load_workbook(io.BytesIO(dst_bytes), read_only=True)
+print("Destination sheets:", wb_dst.sheetnames)
+wb_dst.close()
+
 # ================================================================
 # SHEET 1 (already working logic)
 # ================================================================
