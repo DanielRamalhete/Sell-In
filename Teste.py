@@ -12,10 +12,10 @@ SRC_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In Mensal.
 DST_FILE_PATH = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
 
 # Sheet names - hardcode after confirming from logs
-SRC_SHEET0 = "Sheet0_src_name"
-SRC_SHEET1 = "Sheet1_src_name"
-DST_SHEET0 = "Sheet0_dst_name"
-DST_SHEET1 = "Sheet1_dst_name"
+SRC_SHEET0 = 0
+SRC_SHEET1 = 1
+DST_SHEET0 = 0
+DST_SHEET1 = 1
 
 DATE_COLUMN    = "Data Entrega"
 SRC_JOIN_COL   = "Refª Visita"   # in Sheet 1
