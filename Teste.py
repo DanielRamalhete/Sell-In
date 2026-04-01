@@ -143,6 +143,11 @@ date_lookup = (
     .rename(columns={SRC_JOIN_COL: DST_JOIN_COL})  # align key name to Sheet 0
 )
 
+print("Sample Refª from dst Sheet0:", df_dst0[DST_JOIN_COL].dropna().head(5).tolist())
+print("Sample Refª Visita from date_lookup:", date_lookup[DST_JOIN_COL].dropna().head(5).tolist())
+print("dst0 join col dtype:", df_dst0[DST_JOIN_COL].dtype)
+print("date_lookup join col dtype:", date_lookup[DST_JOIN_COL].dtype)
+
 # Temporarily join Data Entrega into Sheet 0
 df_src0 = df_src0.merge(date_lookup, on=DST_JOIN_COL, how="left")
 df_dst0 = df_dst0.merge(date_lookup, on=DST_JOIN_COL, how="left")
