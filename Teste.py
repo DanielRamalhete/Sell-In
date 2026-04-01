@@ -135,41 +135,36 @@ df_dst0 = pd.read_excel(io.BytesIO(dst_bytes), sheet_name=DST_SHEET0, engine="op
 print(f"Source Sheet0 rows: {len(df_src0)}")
 print(f"Destination Sheet0 rows (before): {len(df_dst0)}")
 
-# Build date lookup from Sheet 1 source: one Data Entrega per Refª Visita
+# Build date lookup from source Sheet 1 only
 date_lookup = (
     df_src1[[SRC_JOIN_COL, DATE_COLUMN]]
     .dropna(subset=[SRC_JOIN_COL])
     .drop_duplicates(subset=[SRC_JOIN_COL], keep="first")
-    .rename(columns={SRC_JOIN_COL: DST_JOIN_COL})  # align key name to Sheet 0
+    .rename(columns={SRC_JOIN_COL: DST_JOIN_COL})
 )
 
-print("Sample Refª from dst Sheet0:", df_dst0[DST_JOIN_COL].dropna().head(5).tolist())
-print("Sample Refª Visita from date_lookup:", date_lookup[DST_JOIN_COL].dropna().head(5).tolist())
-print("dst0 join col dtype:", df_dst0[DST_JOIN_COL].dtype)
-print("date_lookup join col dtype:", date_lookup[DST_JOIN_COL].dtype)
-
-# Temporarily join Data Entrega into Sheet 0
+# Join Data Entrega into source Sheet 0 to identify two month rows
 df_src0 = df_src0.merge(date_lookup, on=DST_JOIN_COL, how="left")
-df_dst0 = df_dst0.merge(date_lookup, on=DST_JOIN_COL, how="left")
-
 df_src0[DATE_COLUMN] = pd.to_datetime(df_src0[DATE_COLUMN], dayfirst=True, errors="coerce")
-df_dst0[DATE_COLUMN] = pd.to_datetime(df_dst0[DATE_COLUMN], dayfirst=True, errors="coerce")
 
+# Get the Refª values that fall in the two month window
 mask_src0 = (df_src0[DATE_COLUMN].dt.date >= month_start) & (df_src0[DATE_COLUMN].dt.date <= month_end)
 to_import0 = df_src0[mask_src0].copy()
+refs_in_window = to_import0[DST_JOIN_COL].unique()
 print(f"Rows to import Sheet0 (two months): {len(to_import0)}")
+print(f"Unique Refª in window: {len(refs_in_window)}")
 
 if to_import0.empty:
     print("Sheet0: Nothing to import.")
-    df_final0 = df_dst0.drop(columns=[DATE_COLUMN])
+    df_final0 = df_dst0
 else:
-    # Drop Data Entrega before writing — not permanent in Sheet 0
-    original_cols0 = [c for c in df_dst0.columns if c != DATE_COLUMN]
+    # Drop Data Entrega from import rows — not permanent in Sheet 0
+    original_cols0 = [c for c in df_dst0.columns]
     to_import0 = to_import0[original_cols0]
 
-    mask_dst0 = (df_dst0[DATE_COLUMN].dt.date >= month_start) & (df_dst0[DATE_COLUMN].dt.date <= month_end)
-    df_dst0 = df_dst0[~mask_dst0]
-    df_dst0 = df_dst0.drop(columns=[DATE_COLUMN])
+    # Remove rows from destination whose Refª is in the two month window
+    df_dst0 = df_dst0[~df_dst0[DST_JOIN_COL].isin(refs_in_window)]
+    print(f"Destination Sheet0 rows after removing two month window: {len(df_dst0)}")
 
     df_final0 = pd.concat([df_dst0, to_import0], ignore_index=True)
     print(f"Destination Sheet0 rows after import: {len(df_final0)}")
