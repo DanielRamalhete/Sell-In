@@ -1,4 +1,4 @@
-import os, io, requests, msal, pandas as pd
+import os, io, requests, msal, openpyxl, pandas as pd
 from datetime import datetime, timedelta
 
 # ========= CONFIG =========
