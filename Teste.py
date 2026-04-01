@@ -97,6 +97,15 @@ src_bytes = download_file(drive_id, src_id)
 print("Downloading destination file...")
 dst_bytes = download_file(drive_id, dst_id)
 
+wb_src = openpyxl.load_workbook(io.BytesIO(src_bytes), read_only=True)
+wb_dst = openpyxl.load_workbook(io.BytesIO(dst_bytes), read_only=True)
+SRC_SHEET = wb_src.sheetnames[1]  # second sheet
+DST_SHEET = wb_dst.sheetnames[1]  # second sheet
+print("Source sheet:", SRC_SHEET)
+print("Destination sheet:", DST_SHEET)
+wb_src.close()
+wb_dst.close()
+
 # Load into pandas
 print("Loading into pandas...")
 df_src = pd.read_excel(io.BytesIO(src_bytes), sheet_name=SRC_SHEET, engine="openpyxl")
