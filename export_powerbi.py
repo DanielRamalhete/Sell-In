@@ -2,6 +2,7 @@ import requests
 import base64
 import os
 import pandas as pd
+import jwt
 
 # --- Config ---
 TENANT_ID       = os.environ["TENANT_ID_POWERBI"]
@@ -27,12 +28,21 @@ def get_token(scope):
     )
     r.raise_for_status()
     return r.json()["access_token"]
-    
 
-# --- 2. Executar DAX query e exportar para Excel ---
+# --- 2. Debug token ---
+def debug_token(token):
+    decoded = jwt.decode(token, options={"verify_signature": False})
+    print(f"Token appid: {decoded.get('appid')}")
+    print(f"Token roles: {decoded.get('roles')}")
+    print(f"Token aud: {decoded.get('aud')}")
+
+# --- 3. Executar DAX query e exportar para Excel ---
 def export_data_to_excel():
     token   = get_token("https://analysis.windows.net/powerbi/api/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    print("=== Debug Token ===")
+    debug_token(token)
 
     dax_query = """
         EVALUATE
@@ -69,14 +79,14 @@ def export_data_to_excel():
     rows = r.json()["results"][0]["tables"][0]["rows"]
     df = pd.DataFrame(rows)
 
-    # Limpar nomes de colunas (a API devolve "Farmácias[Nome Farmácia]" etc.)
+    # Limpar nomes de colunas
     df.columns = [col.split("[")[-1].rstrip("]") for col in df.columns]
 
     print(f"Colunas: {list(df.columns)}")
     print(f"Linhas: {len(df)}")
     print(df.head())
 
-    # Pivot para ter os meses como colunas (igual ao visual do Power BI)
+    # Pivot para ter os meses como colunas
     df_pivot = df.pivot_table(
         index="Nome Farmácia",
         columns="Mês",
@@ -87,7 +97,7 @@ def export_data_to_excel():
     df_pivot.to_excel(OUTPUT_FILE, index=False)
     print(f"Excel criado: {OUTPUT_FILE}")
 
-# --- 3. Enviar email ---
+# --- 4. Enviar email ---
 def send_email():
     token   = get_token("https://graph.microsoft.com/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -119,12 +129,6 @@ def send_email():
         json=payload
     )
 
-import jwt  # pip install pyjwt
-decoded = jwt.decode(token, options={"verify_signature": False})
-print(f"Token sub: {decoded.get('sub')}")
-print(f"Token appid: {decoded.get('appid')}")
-print(f"Token roles: {decoded.get('roles')}")
-    
     print(f"Email status: {r.status_code}")
     print(f"Email response: {r.text}")
     r.raise_for_status()
