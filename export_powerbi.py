@@ -27,6 +27,7 @@ def get_token(scope):
     )
     r.raise_for_status()
     return r.json()["access_token"]
+    
 
 # --- 2. Executar DAX query e exportar para Excel ---
 def export_data_to_excel():
@@ -118,6 +119,12 @@ def send_email():
         json=payload
     )
 
+import jwt  # pip install pyjwt
+decoded = jwt.decode(token, options={"verify_signature": False})
+print(f"Token sub: {decoded.get('sub')}")
+print(f"Token appid: {decoded.get('appid')}")
+print(f"Token roles: {decoded.get('roles')}")
+    
     print(f"Email status: {r.status_code}")
     print(f"Email response: {r.text}")
     r.raise_for_status()
