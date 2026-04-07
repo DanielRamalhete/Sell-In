@@ -110,7 +110,7 @@ def cutoff_date():
 
 # ========================== NORMALISATION ====================
 def _norm(s):
-    s = str(s).lower().replace("refª", "ref").replace("ref.", "ref").replace("gsi_zona", "gsi")
+    s = str(s).lower().replace("refª", "ref").replace("ref.", "ref").replace("gsi_zona", "gsi").replace("desconto %", "desconto_percentagem")
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^\w]+", "_", s).strip("_")
