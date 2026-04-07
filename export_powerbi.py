@@ -29,7 +29,23 @@ def get_token(scope):
     r.raise_for_status()
     return r.json()["access_token"]
 
-# --- 2. Export Power BI ---
+# --- 2. Listar páginas (para debug) ---
+def get_pages():
+    token   = get_token("https://analysis.windows.net/powerbi/api/.default")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = requests.get(
+        f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE_ID}/reports/{REPORT_ID}/pages",
+        headers=headers
+    )
+    r.raise_for_status()
+    pages = r.json().get("value", [])
+    print("=== Páginas disponíveis ===")
+    for p in pages:
+        print(f"  name: {p['name']} | displayName: {p['displayName']}")
+    return pages
+
+# --- 3. Export Power BI ---
 def export_report():
     token   = get_token("https://analysis.windows.net/powerbi/api/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -65,7 +81,7 @@ def export_report():
         f.write(file_r.content)
     print(f"Ficheiro guardado: {OUTPUT_FILE}")
 
-# --- 3. Enviar email ---
+# --- 4. Enviar email ---
 def send_email():
     token   = get_token("https://graph.microsoft.com/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -101,5 +117,6 @@ def send_email():
 
 # --- Main ---
 if __name__ == "__main__":
+    get_pages()      # imprime todas as páginas para confirmar o PAGE_NAME correto
     export_report()
     send_email()
