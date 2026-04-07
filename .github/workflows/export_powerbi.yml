@@ -31,4 +31,5 @@ jobs:
           SENDER_EMAIL:         ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAIL:      ${{ secrets.RECIPIENT_EMAIL }}
           PAGE_NAME:            ${{ secrets.PAGE_NAME }}
+          DATASET_ID_POWERBI: ${{ secrets.DATASET_ID_POWERBI }}
         run: python export_powerbi.py
