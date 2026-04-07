@@ -1,0 +1,34 @@
+name: Export Power BI Monthly
+
+on:
+  schedule:
+    - cron: '0 8 1 * *'   # Dia 1 de cada mês às 8h UTC
+  workflow_dispatch:        # Permite correr manualmente para testar
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run export script
+        env:
+          TENANT_ID_POWERBI:    ${{ secrets.TENANT_ID_POWERBI }}
+          CLIENT_ID_POWERBI:    ${{ secrets.CLIENT_ID_POWERBI }}
+          CLIENT_SECRET_POWERBI: ${{ secrets.CLIENT_SECRET_POWERBI }}
+          WORKSPACE_ID_POWERBI: ${{ secrets.WORKSPACE_ID_POWERBI }}
+          REPORT_ID_POWERBI:    ${{ secrets.REPORT_ID_POWERBI }}
+          SENDER_EMAIL:         ${{ secrets.SENDER_EMAIL }}
+          RECIPIENT_EMAIL:      ${{ secrets.RECIPIENT_EMAIL }}
+          PAGE_NAME:            ${{ secrets.PAGE_NAME }}
+        run: python export_powerbi.py
