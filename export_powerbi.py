@@ -51,13 +51,22 @@ def export_report():
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     base    = f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE_ID}/reports/{REPORT_ID}"
 
-    # Iniciar export
-    r = requests.post(f"{base}/ExportTo", headers=headers, json={
+    payload = {
         "format": "XLSX",
         "powerBIReportConfiguration": {
             "pages": [{"pageName": PAGE_NAME}]
         }
-    })
+    }
+
+    print(f"=== Payload enviado ===")
+    print(payload)
+
+    r = requests.post(f"{base}/ExportTo", headers=headers, json=payload)
+
+    print(f"=== Resposta da API ===")
+    print(f"Status code: {r.status_code}")
+    print(f"Response body: {r.text}")
+
     r.raise_for_status()
     export_id = r.json()["id"]
     print(f"Export iniciado: {export_id}")
@@ -117,6 +126,6 @@ def send_email():
 
 # --- Main ---
 if __name__ == "__main__":
-    get_pages()      # imprime todas as páginas para confirmar o PAGE_NAME correto
+    get_pages()
     export_report()
     send_email()
