@@ -1,17 +1,16 @@
 import requests
 import base64
-import time
 import os
+import pandas as pd
 
 # --- Config ---
 TENANT_ID       = os.environ["TENANT_ID_POWERBI"]
 CLIENT_ID       = os.environ["CLIENT_ID_POWERBI"]
 CLIENT_SECRET   = os.environ["CLIENT_SECRET_POWERBI"]
 WORKSPACE_ID    = os.environ["WORKSPACE_ID_POWERBI"]
-REPORT_ID       = os.environ["REPORT_ID_POWERBI"]
+DATASET_ID      = os.environ["DATASET_ID_POWERBI"]
 SENDER_EMAIL    = os.environ["SENDER_EMAIL"]
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
-PAGE_NAME       = os.environ["PAGE_NAME"]
 
 OUTPUT_FILE     = "market_share.xlsx"
 
@@ -29,68 +28,65 @@ def get_token(scope):
     r.raise_for_status()
     return r.json()["access_token"]
 
-# --- 2. Listar páginas (para debug) ---
-def get_pages():
-    token   = get_token("https://analysis.windows.net/powerbi/api/.default")
-    headers = {"Authorization": f"Bearer {token}"}
-
-    r = requests.get(
-        f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE_ID}/reports/{REPORT_ID}/pages",
-        headers=headers
-    )
-    r.raise_for_status()
-    pages = r.json().get("value", [])
-    print("=== Páginas disponíveis ===")
-    for p in pages:
-        print(f"  name: {p['name']} | displayName: {p['displayName']}")
-    return pages
-
-# --- 3. Export Power BI ---
-def export_report():
+# --- 2. Executar DAX query e exportar para Excel ---
+def export_data_to_excel():
     token   = get_token("https://analysis.windows.net/powerbi/api/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    base    = f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE_ID}/reports/{REPORT_ID}"
 
-    payload = {
-        "format": "XLSX",
-        "powerBIReportConfiguration": {
-            "pages": [{"pageName": PAGE_NAME}]
+    dax_query = """
+        EVALUATE
+        CALCULATETABLE(
+            SUMMARIZECOLUMNS(
+                Farmácias[Nome Farmácia],
+                Calendário[Mês],
+                Factos[Marca],
+                "SOS Corrigido", [SOS Corrigido]
+            ),
+            Calendário[Ano] = 2026,
+            Factos[Parceiro] = "DANONE",
+            Factos[Situação] IN {"Validado", "Valido"},
+            NOT Factos[Marca] = "Bledina",
+            NOT ISBLANK(Farmácias[Nome Farmácia]),
+            NOT Factos[Secção] = "Raio-X"
+        )
+    """
+
+    r = requests.post(
+        f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries",
+        headers=headers,
+        json={
+            "queries": [{"query": dax_query}],
+            "serializerSettings": {"includeNulls": True}
         }
-    }
+    )
 
-    print(f"=== Payload enviado ===")
-    print(payload)
-
-    r = requests.post(f"{base}/ExportTo", headers=headers, json=payload)
-
-    print(f"=== Resposta da API ===")
-    print(f"Status code: {r.status_code}")
-    print(f"Response body: {r.text}")
-
+    print(f"DAX query status: {r.status_code}")
+    print(f"DAX query response: {r.text[:500]}")
     r.raise_for_status()
-    export_id = r.json()["id"]
-    print(f"Export iniciado: {export_id}")
 
-    # Polling
-    for _ in range(24):  # max 2 minutos
-        time.sleep(5)
-        status = requests.get(f"{base}/exports/{export_id}", headers=headers).json()
-        print(f"Status: {status['status']}")
-        if status["status"] == "Succeeded":
-            break
-        if status["status"] == "Failed":
-            raise Exception("Export falhou no Power BI")
-    else:
-        raise Exception("Timeout no export")
+    # Converter para DataFrame
+    rows = r.json()["results"][0]["tables"][0]["rows"]
+    df = pd.DataFrame(rows)
 
-    # Download
-    file_r = requests.get(f"{base}/exports/{export_id}/file", headers=headers)
-    file_r.raise_for_status()
-    with open(OUTPUT_FILE, "wb") as f:
-        f.write(file_r.content)
-    print(f"Ficheiro guardado: {OUTPUT_FILE}")
+    # Limpar nomes de colunas (a API devolve "Farmácias[Nome Farmácia]" etc.)
+    df.columns = [col.split("[")[-1].rstrip("]") for col in df.columns]
 
-# --- 4. Enviar email ---
+    print(f"Colunas: {list(df.columns)}")
+    print(f"Linhas: {len(df)}")
+    print(df.head())
+
+    # Pivot para ter os meses como colunas (igual ao visual do Power BI)
+    df_pivot = df.pivot_table(
+        index="Nome Farmácia",
+        columns="Mês",
+        values="SOS Corrigido",
+        aggfunc="first"
+    ).reset_index()
+
+    df_pivot.to_excel(OUTPUT_FILE, index=False)
+    print(f"Excel criado: {OUTPUT_FILE}")
+
+# --- 3. Enviar email ---
 def send_email():
     token   = get_token("https://graph.microsoft.com/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -121,11 +117,13 @@ def send_email():
         headers=headers,
         json=payload
     )
+
+    print(f"Email status: {r.status_code}")
+    print(f"Email response: {r.text}")
     r.raise_for_status()
     print("Email enviado com sucesso")
 
 # --- Main ---
 if __name__ == "__main__":
-    get_pages()
-    export_report()
+    export_data_to_excel()
     send_email()
