@@ -198,11 +198,7 @@ df = apply_empresa_wbrands_rule(df)
 # Convert date columns
 for col in ["data_registo", "data_enc", "data_entrega"]:
     if col in df.columns:
-        numeric = pd.to_numeric(df[col], errors="coerce")
-        if numeric.notna().sum() > 0:
-            df[col] = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
-        else:
-            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
         df[col] = df[col].dt.date
 
 # Filter empresas whitelist
