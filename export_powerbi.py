@@ -2,7 +2,6 @@ import requests
 import base64
 import os
 import pandas as pd
-import jwt
 
 # --- Config ---
 TENANT_ID       = os.environ["TENANT_ID_POWERBI"]
@@ -12,11 +11,32 @@ WORKSPACE_ID    = os.environ["WORKSPACE_ID_POWERBI"]
 DATASET_ID      = os.environ["DATASET_ID_POWERBI"]
 SENDER_EMAIL    = os.environ["SENDER_EMAIL"]
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
+PBI_USERNAME    = os.environ["PBI_USERNAME"]
+PBI_PASSWORD    = os.environ["PBI_PASSWORD"]
 
 OUTPUT_FILE     = "market_share.xlsx"
 
-# --- 1. Autenticação ---
-def get_token(scope):
+# --- 1. Autenticação Delegada (ROPC) ---
+def get_token_delegated(scope):
+    r = requests.post(
+        f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
+        data={
+            "grant_type":    "password",
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "username":      PBI_USERNAME,
+            "password":      PBI_PASSWORD,
+            "scope":         scope,
+        }
+    )
+    print(f"Auth status: {r.status_code}")
+    if r.status_code != 200:
+        print(f"Auth error: {r.text}")
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+# --- 2. Autenticação App (para Graph API / email) ---
+def get_token_app(scope):
     r = requests.post(
         f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
         data={
@@ -29,20 +49,10 @@ def get_token(scope):
     r.raise_for_status()
     return r.json()["access_token"]
 
-# --- 2. Debug token ---
-def debug_token(token):
-    decoded = jwt.decode(token, options={"verify_signature": False})
-    print(f"Token appid: {decoded.get('appid')}")
-    print(f"Token roles: {decoded.get('roles')}")
-    print(f"Token aud: {decoded.get('aud')}")
-
 # --- 3. Executar DAX query e exportar para Excel ---
 def export_data_to_excel():
-    token   = get_token("https://analysis.windows.net/powerbi/api/.default")
+    token   = get_token_delegated("https://analysis.windows.net/powerbi/api/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    print("=== Debug Token ===")
-    debug_token(token)
 
     dax_query = """
         EVALUATE
@@ -99,7 +109,7 @@ def export_data_to_excel():
 
 # --- 4. Enviar email ---
 def send_email():
-    token   = get_token("https://graph.microsoft.com/.default")
+    token   = get_token_app("https://graph.microsoft.com/.default")
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     with open(OUTPUT_FILE, "rb") as f:
