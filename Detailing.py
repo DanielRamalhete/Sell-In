@@ -93,7 +93,7 @@ dst_bytes = download_file(drive_id, dst_id)
 # Detect sheet names
 wb_src = openpyxl.load_workbook(io.BytesIO(src_bytes), read_only=True)
 wb_dst = openpyxl.load_workbook(io.BytesIO(dst_bytes), read_only=True)
-SRC_SHEET = wb_src.sheetnames[0]
+SRC_SHEET = wb_src.sheetnames[1]
 DST_SHEET = wb_dst.sheetnames[0]
 print(f"Source sheet: {SRC_SHEET}")
 print(f"Destination sheet: {DST_SHEET}")
