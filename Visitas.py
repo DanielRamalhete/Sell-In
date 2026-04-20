@@ -73,6 +73,14 @@ def two_month_bounds(d: datetime):
         first = datetime(d.year, d.month - 1, 1).date()
     return first, last
 
+def month_bounds(d: datetime):
+    first = datetime(d.year, d.month, 1).date()
+    if d.month == 12:
+        last = datetime(d.year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        last = datetime(d.year, d.month + 1, 1).date() - timedelta(days=1)
+    return first, last
+
 # ---- Main flow ----
 site_id  = get_site_id()
 drive_id = get_drive_id(site_id)
@@ -80,7 +88,7 @@ src_id   = get_item_id(drive_id, SRC_FILE_PATH)
 dst_id   = get_item_id(drive_id, DST_FILE_PATH)
 
 today = datetime.today()
-month_start, month_end = two_month_bounds(today)
+month_start, month_end = month_bounds(today)
 print(f"Target window: {month_start} to {month_end}")
 
 # Download both files
