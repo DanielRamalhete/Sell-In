@@ -35,8 +35,8 @@ DST_COLUMNS = [
 # Empresas permitidas
 EMPRESAS_WHITELIST = {
     "bbraun", "dr. scholl's", "infacol", "kelo.cell", "lifergy",
-    "medela", "monchique", "moskout", "pranarom", "roche",
-    "sidefarma", "wab", "wbrands", "movicol"
+    "medela", "monchique", "moskout", "movicol", "pranarom", "roche",
+    "sidefarma", "wab", "wbrands"
 }
 
 # ========================== AUTH =============================
