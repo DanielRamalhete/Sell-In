@@ -116,13 +116,24 @@ def _norm(s):
     return re.sub(r"[^\w]+", "_", s).strip("_")
 
 def normalize_columns(df):
+    # Remove duplicates before rename
+    df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
     ren = {}
     for c in df.columns:
         for d in DST_COLUMNS:
             if _norm(c) == _norm(d):
                 ren[c] = d
                 break
-    return df.rename(columns=ren).reindex(columns=DST_COLUMNS)
+    df = df.rename(columns=ren)
+
+    # Remove duplicates again after rename (rename may create new ones)
+    dupes = df.columns[df.columns.duplicated()].tolist()
+    if dupes:
+        print(f"Duplicate columns after rename (dropping): {dupes}")
+    df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
+    return df.reindex(columns=DST_COLUMNS)
 
 # ========================== WBRANDS RULE =====================
 def apply_empresa_wbrands_rule(df):
@@ -177,7 +188,7 @@ df = df_lstprd.merge(df_phrord, how="left", left_on="Refª Visita", right_on="Re
 # Drop DIM column if present (comes from PhrOrdLst)
 df = df.drop(columns=[c for c in df.columns if c.lower() == "dim"], errors="ignore")
 
-# Remove duplicate columns after first merge keeping first occurrence
+# Remove duplicate columns after first merge
 dupes_1 = df.columns[df.columns.duplicated()].tolist()
 if dupes_1:
     print(f"Duplicate columns after PhrOrdLst merge (dropping): {dupes_1}")
@@ -193,7 +204,7 @@ gsi_cols = [c for c in df.columns if c.lower() == "gsi"]
 if gsi_cols:
     df["gsi"] = df[gsi_cols[0]]
 
-# Remove duplicate columns after second merge keeping first occurrence
+# Remove duplicate columns after second merge
 dupes_2 = df.columns[df.columns.duplicated()].tolist()
 if dupes_2:
     print(f"Duplicate columns after Painel merge (dropping): {dupes_2}")
