@@ -10,17 +10,17 @@ SITE_HOSTNAME = os.getenv("SITE_HOSTNAME")
 SITE_PATH     = os.getenv("SITE_PATH")
 
 # Fontes
-HISTORICO_FILE_PATH  = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
+HISTORICO_FILE_PATH      = "/General/Teste - Daniel PowerAutomate/Historico Sell In.xlsx"
 HISTORICO_SHEET_LSTPRD   = "LstPrd"      # Sheet 1 — tem Data Entrega e Refª Visita
 HISTORICO_SHEET_PHRORD   = "PhrOrdLst"  # Sheet 0 — tem Refª
 
-PAINEL_FILE_PATH     = "/General/Teste - Daniel PowerAutomate/PAINEL_WBRANDS_26.xlsx"
-PAINEL_SHEET         = "Painel Wize Brands"
+PAINEL_FILE_PATH         = "/General/Teste - Daniel PowerAutomate/PAINEL_WBRANDS_26.xlsx"
+PAINEL_SHEET             = "Painel Wize Brands"
 
 # Destinos
-DST_FILE_PATH        = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.xlsx"
-DST_SHEET            = "Historico"
-CSV_DEST_PATH        = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
+DST_FILE_PATH            = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.xlsx"
+DST_SHEET                = "Historico"
+CSV_DEST_PATH            = "/General/Teste - Daniel PowerAutomate/GreenTapeFinal.csv"
 
 # Colunas finais
 DST_COLUMNS = [
@@ -152,7 +152,7 @@ print("Loading sheets into pandas...")
 df_lstprd = pd.read_excel(io.BytesIO(historico_bytes), sheet_name=HISTORICO_SHEET_LSTPRD, engine="openpyxl")
 df_phrord = pd.read_excel(io.BytesIO(historico_bytes), sheet_name=HISTORICO_SHEET_PHRORD, engine="openpyxl")
 
-# Load Painel — detect sheet automatically
+# Load Painel
 wb_painel = openpyxl.load_workbook(io.BytesIO(painel_bytes), read_only=True)
 print("Painel sheets:", wb_painel.sheetnames)
 wb_painel.close()
@@ -177,6 +177,12 @@ df = df_lstprd.merge(df_phrord, how="left", left_on="Refª Visita", right_on="Re
 # Drop DIM column if present (comes from PhrOrdLst)
 df = df.drop(columns=[c for c in df.columns if c.lower() == "dim"], errors="ignore")
 
+# Remove duplicate columns after first merge keeping first occurrence
+dupes_1 = df.columns[df.columns.duplicated()].tolist()
+if dupes_1:
+    print(f"Duplicate columns after PhrOrdLst merge (dropping): {dupes_1}")
+df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
 print(f"After merge with PhrOrdLst: {len(df)} rows")
 
 # Merge 2: result + Painel via Ref. Farmácia = Ref
@@ -186,6 +192,12 @@ df = df.merge(df_painel, how="left", left_on="Ref. Farmácia", right_on="Ref")
 gsi_cols = [c for c in df.columns if c.lower() == "gsi"]
 if gsi_cols:
     df["gsi"] = df[gsi_cols[0]]
+
+# Remove duplicate columns after second merge keeping first occurrence
+dupes_2 = df.columns[df.columns.duplicated()].tolist()
+if dupes_2:
+    print(f"Duplicate columns after Painel merge (dropping): {dupes_2}")
+df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
 print(f"After merge with Painel: {len(df)} rows")
 
@@ -203,7 +215,7 @@ for col in ["data_registo", "data_enc", "data_entrega"]:
 
 # Filter empresas whitelist
 before = len(df)
-df = df[df["empresa"].apply(lambda x: str(x).strip().lower() if x is not None else "") .isin(EMPRESAS_WHITELIST)]
+df = df[df["empresa"].apply(lambda x: str(x).strip().lower() if x is not None else "").isin(EMPRESAS_WHITELIST)]
 after = len(df)
 print(f"Empresa filter: removed {before - after} rows. Final total: {after}")
 
