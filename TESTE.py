@@ -106,7 +106,7 @@ def months_ago(dt, months):
 
 def cutoff_date():
     now = datetime.now(timezone.utc) - timedelta(days=1)
-    return months_ago(now, 24).date()
+    return months_ago(now, 21).date()
 
 # ========================== NORMALISATION ====================
 def _norm(s):
